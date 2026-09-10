@@ -312,7 +312,7 @@ textarea{resize:vertical;min-height:80px}
   <div class="card" style="text-align:center" >
     <h3 style="margin-bottom:8px" >📱 关于</h3>
     <p style="font-size:18px;font-weight:600;color:var(--primary)" >默写助手</p>
-    <p style="font-size:13px;color:var(--text2);margin-top:4px" id="about-version" >版本 1.0.18</p>
+    <p style="font-size:13px;color:var(--text2);margin-top:4px" id="about-version" >版本 1.0.19</p>
     <p style="font-size:12px;color:var(--text2);margin-top:6px" >帮助孩子高效练习默写的工具</p>
   </div>
   <button class="btn btn-danger btn-block" onclick="clearAllData()" style="margin-top:12px" >清除所有数据</button>
@@ -407,7 +407,7 @@ textarea{resize:vertical;min-height:80px}
 
 <script>// ===== Selection =====
 let selectedWordIndices = new Set();
-const APP_VERSION = '1.0.18';
+const APP_VERSION = '1.0.19';
 
 function onWordCheck(cb) {
   var idx = parseInt(cb.dataset.idx);
@@ -1762,18 +1762,36 @@ function updateSpeakButtons() {
   });
 }
 
+function syncWrongBookItem(r) {
+  if (!r) return;
+  var it = r.item || {};
+  var key = (it.word||'') + '|' + (it.collection||'') + '|' + (it.type||'');
+  var wi = -1;
+  for (var i = 0; i < wrongBook.length; i++) { if (wrongBook[i]._key === key) { wi = i; break; } }
+  if (r.correct === true) {
+    if (wi >= 0) wrongBook.splice(wi, 1);
+  } else if (r.correct === false || r.skipped) {
+    if (wi >= 0) { wrongBook[wi].wrongCount = (wrongBook[wi].wrongCount||1) + 1; wrongBook[wi].lastWrong = Date.now(); }
+    else wrongBook.push({ _key:key, word:it.word, pinyin:it.pinyin||'', collection:it.collection||'', type:it.type||'', title:it.title||'', wrongCount:1, lastWrong:Date.now(), addTime:Date.now() });
+  }
+  // correct === null：尚未批改，不操作错题集
+}
+
 function manualMark(idx, isCorrect) {
   if(idx >= 0 && idx < dictResults.length && dictResults[idx]) {
     dictResults[idx].correct = isCorrect;
-    finishDictation();
+    syncWrongBookItem(dictResults[idx]);
+    saveData();
+    renderResultPage();
   }
 }
 
-function finishDictation() {
+function renderResultPage() {
   document.getElementById('dictation-play').style.display = 'none';
   document.getElementById('dictation-result').style.display = '';
   var total = dictResults.length;
-  var correct = dictResults.filter(function(r) { return r && r.correct === true; }).length; var pending = dictResults.filter(function(r) { return r && r.correct === null; }).length;
+  var correct = dictResults.filter(function(r) { return r && r.correct === true; }).length;
+  var pending = dictResults.filter(function(r) { return r && r.correct === null; }).length;
   var score = total > 0 ? Math.round(correct / total * 100) : 0;
   var scoreEl = document.getElementById('result-score');
   scoreEl.textContent = score + '%';
@@ -1794,24 +1812,18 @@ function finishDictation() {
       '</div>' +
     '</div>';
   }).join('');
-  history.push({ date: Date.now(), score: score, total: total, correct: correct });
-  saveData();
-  // ===== 错题集：按本次默写结果自动更新（答错/跳过加入，答对移除） =====
-  dictResults.forEach(function(r) {
-    if (!r) return; // 跳过未作答的题目，避免崩溃（也避免产生空错题）
-    var it = r.item || {};
-    var key = (it.word||'') + '|' + (it.collection||'') + '|' + (it.type||'');
-    var wi = -1;
-    for (var i = 0; i < wrongBook.length; i++) { if (wrongBook[i]._key === key) { wi = i; break; } }
-    if (r.correct === true) {
-      if (wi >= 0) wrongBook.splice(wi, 1);
-    } else {
-      if (wi >= 0) { wrongBook[wi].wrongCount = (wrongBook[wi].wrongCount||1) + 1; wrongBook[wi].lastWrong = Date.now(); }
-      else wrongBook.push({ _key:key, word:it.word, pinyin:it.pinyin||'', collection:it.collection||'', type:it.type||'', title:it.title||'', wrongCount:1, lastWrong:Date.now(), addTime:Date.now() });
-    }
-  });
-  localStorage.setItem('dictation_wrong_book', JSON.stringify(wrongBook));
+  return { total: total, correct: correct, score: score };
+}
 
+function finishDictation() {
+  var stats = renderResultPage();
+  // 只同步已经确定的题目（文字题自动判分、跳过题）；手写题 correct===null 留到结果页手动批改
+  dictResults.forEach(function(r) {
+    if (r && r.correct !== null) syncWrongBookItem(r);
+  });
+  saveData();
+  history.push({ date: Date.now(), score: stats.score, total: stats.total, correct: stats.correct });
+  saveData();
 }
 
 // ===== 提交前：检查全部题目（可逐题修改） =====

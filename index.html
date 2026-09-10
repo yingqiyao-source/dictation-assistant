@@ -312,7 +312,7 @@ textarea{resize:vertical;min-height:80px}
   <div class="card" style="text-align:center" >
     <h3 style="margin-bottom:8px" >📱 关于</h3>
     <p style="font-size:18px;font-weight:600;color:var(--primary)" >默写助手</p>
-    <p style="font-size:13px;color:var(--text2);margin-top:4px" id="about-version" >版本 1.0.17</p>
+    <p style="font-size:13px;color:var(--text2);margin-top:4px" id="about-version" >版本 1.0.18</p>
     <p style="font-size:12px;color:var(--text2);margin-top:6px" >帮助孩子高效练习默写的工具</p>
   </div>
   <button class="btn btn-danger btn-block" onclick="clearAllData()" style="margin-top:12px" >清除所有数据</button>
@@ -407,7 +407,7 @@ textarea{resize:vertical;min-height:80px}
 
 <script>// ===== Selection =====
 let selectedWordIndices = new Set();
-const APP_VERSION = '1.0.17';
+const APP_VERSION = '1.0.18';
 
 function onWordCheck(cb) {
   var idx = parseInt(cb.dataset.idx);
@@ -1763,7 +1763,7 @@ function updateSpeakButtons() {
 }
 
 function manualMark(idx, isCorrect) {
-  if(idx >= 0 && idx < dictResults.length) {
+  if(idx >= 0 && idx < dictResults.length && dictResults[idx]) {
     dictResults[idx].correct = isCorrect;
     finishDictation();
   }
@@ -1773,7 +1773,7 @@ function finishDictation() {
   document.getElementById('dictation-play').style.display = 'none';
   document.getElementById('dictation-result').style.display = '';
   var total = dictResults.length;
-  var correct = dictResults.filter(function(r) { return r.correct === true; }).length; var pending = dictResults.filter(function(r) { return r.correct === null; }).length;
+  var correct = dictResults.filter(function(r) { return r && r.correct === true; }).length; var pending = dictResults.filter(function(r) { return r && r.correct === null; }).length;
   var score = total > 0 ? Math.round(correct / total * 100) : 0;
   var scoreEl = document.getElementById('result-score');
   scoreEl.textContent = score + '%';
@@ -1781,6 +1781,9 @@ function finishDictation() {
   document.getElementById('result-text').textContent = score >= 80 ? '太棒了！' : (score >= 60 ? '还不错，继续加油！' : '继续加油！');
   var review = document.getElementById('result-review');
   review.innerHTML = dictResults.map(function(r, i) {
+    if (!r) {
+      return '<div class="review-item"><div class="mark pending">?</div><div><div class="review-q">' + (i+1) + '. （未填写）</div><div class="result-a" style="color:#888">本题未作答</div></div></div>';
+    }
     return '<div class="review-item">' +
       '<div class="mark ' + (r.correct===true ? 'right' : (r.correct===false ? 'wrong' : 'pending')) + '">' + (r.correct===true ? '✓' : (r.correct===false ? '✗' : '?')) + '</div>' +
       '<div><div class="review-q">' + (i+1) + '. ' + escapeHtml(r.item.word) + '</div>' +
@@ -1795,6 +1798,7 @@ function finishDictation() {
   saveData();
   // ===== 错题集：按本次默写结果自动更新（答错/跳过加入，答对移除） =====
   dictResults.forEach(function(r) {
+    if (!r) return; // 跳过未作答的题目，避免崩溃（也避免产生空错题）
     var it = r.item || {};
     var key = (it.word||'') + '|' + (it.collection||'') + '|' + (it.type||'');
     var wi = -1;

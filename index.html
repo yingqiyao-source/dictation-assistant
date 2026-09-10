@@ -240,6 +240,7 @@ textarea{resize:vertical;min-height:80px}
         <button class="btn btn-outline btn-sm" onclick="playCurrentAudio()" >朗读</button>
         <button class="btn btn-primary" onclick="submitAnswer()" >确定</button>
         <button class="btn btn-outline btn-sm" onclick="skipWord()" >跳过</button>
+        <button class="btn btn-outline btn-sm" onclick="reviewAllDictation()" style="border-color:var(--primary);color:var(--primary)">检查</button>
         <button class="btn btn-accent btn-sm" onclick="hwOpen()" >手写</button>
       </div>
     </div>
@@ -258,6 +259,17 @@ textarea{resize:vertical;min-height:80px}
       <button class="btn btn-accent" onclick="startCopyPractice()" >✍️ 抄写练习</button>
     </div>
     <button class="btn btn-outline btn-block" onclick="resetDictation()" style="margin-top:12px" >返回</button>
+  </div>
+  <div id="dictation-review" style="display:none" >
+    <div class="card" >
+      <h3 style="margin-bottom:6px">📋 检查全部题目</h3>
+      <p style="font-size:13px;color:var(--text2);margin-bottom:12px">提交前可逐题检查，发现错误点「修改」返回重做。</p>
+      <div id="review-all-list"></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:14px">
+        <button class="btn btn-primary btn-block" onclick="confirmReviewSubmit()">确认提交</button>
+        <button class="btn btn-outline" onclick="backToDictationFromReview()" style="flex:1">继续答题</button>
+      </div>
+    </div>
   </div>
   <div id="page-review" style="display:none" >
     <div class="card" style="text-align:center" >
@@ -300,7 +312,7 @@ textarea{resize:vertical;min-height:80px}
   <div class="card" style="text-align:center" >
     <h3 style="margin-bottom:8px" >📱 关于</h3>
     <p style="font-size:18px;font-weight:600;color:var(--primary)" >默写助手</p>
-    <p style="font-size:13px;color:var(--text2);margin-top:4px" id="about-version" >版本 1.0.16</p>
+    <p style="font-size:13px;color:var(--text2);margin-top:4px" id="about-version" >版本 1.0.17</p>
     <p style="font-size:12px;color:var(--text2);margin-top:6px" >帮助孩子高效练习默写的工具</p>
   </div>
   <button class="btn btn-danger btn-block" onclick="clearAllData()" style="margin-top:12px" >清除所有数据</button>
@@ -333,6 +345,11 @@ textarea{resize:vertical;min-height:80px}
       <button class="hw-btn hw-btn-outline" onclick="hwPrevPage()">← 上一页</button>
       <span id="hw-pager-info" style="font-size:14px;color:var(--text2);min-width:48px;text-align:center">1 / 1</span>
       <button class="hw-btn hw-btn-outline" onclick="hwNextPage()">下一页 →</button>
+    </div>
+    <div id="hw-eraser-size" style="display:none;align-items:center;gap:10px;margin:10px 2px">
+      <span style="font-size:13px;color:var(--text2);white-space:nowrap">橡皮大小</span>
+      <input type="range" id="hw-eraser-range" min="6" max="48" value="10" oninput="setHwEraserSize(this.value)" style="flex:1;accent-color:var(--primary)">
+      <span id="hw-eraser-size-val" style="font-size:13px;min-width:36px;text-align:right;color:var(--text)">10</span>
     </div>
     <div class="hw-actions" >
       <button id="hw-clear-btn" class="hw-btn hw-btn-outline" onclick="hwClear()" >清除</button>
@@ -390,7 +407,7 @@ textarea{resize:vertical;min-height:80px}
 
 <script>// ===== Selection =====
 let selectedWordIndices = new Set();
-const APP_VERSION = '1.0.16';
+const APP_VERSION = '1.0.17';
 
 function onWordCheck(cb) {
   var idx = parseInt(cb.dataset.idx);
@@ -608,6 +625,7 @@ let cpIdx = 0;
 let cpCanvases = [];
 const COPY_COUNT = 3;
 let cpEraser = false;
+let cpEraserSize = 10; // 抄写练习橡皮大小（CSS px），画布内按 ×2 换算
 
 function startCopyPractice() {
   cpList = dictResults.filter(function(r) { return !r.correct && !r.skipped; });
@@ -701,10 +719,10 @@ function showCpItem() {
         return {x:(e.clientX-r.left)*sx, y:(e.clientY-r.top)*sy};
       }
       c.ontouchstart = function(e){e.preventDefault();drawing=true;var p=pos(e);lx=p.x;ly=p.y;};
-      c.ontouchmove = function(e){if(!drawing)return;e.preventDefault();var p=pos(e);ctx.globalCompositeOperation = cpEraser ? 'destination-out' : 'source-over';ctx.beginPath();ctx.moveTo(lx,ly);ctx.lineTo(p.x,p.y);ctx.stroke();lx=p.x;ly=p.y;};
+      c.ontouchmove = function(e){if(!drawing)return;e.preventDefault();var p=pos(e);ctx.globalCompositeOperation = cpEraser ? 'destination-out' : 'source-over';ctx.lineWidth = cpEraser ? cpEraserSize*2 : 3;ctx.beginPath();ctx.moveTo(lx,ly);ctx.lineTo(p.x,p.y);ctx.stroke();lx=p.x;ly=p.y;};
       c.ontouchend = function(){drawing=false;};
       c.onmousedown = function(e){drawing=true;var p=pos(e);lx=p.x;ly=p.y;};
-      c.onmousemove = function(e){if(!drawing)return;var p=pos(e);ctx.globalCompositeOperation = cpEraser ? 'destination-out' : 'source-over';ctx.beginPath();ctx.moveTo(lx,ly);ctx.lineTo(p.x,p.y);ctx.stroke();lx=p.x;ly=p.y;};
+      c.onmousemove = function(e){if(!drawing)return;var p=pos(e);ctx.globalCompositeOperation = cpEraser ? 'destination-out' : 'source-over';ctx.lineWidth = cpEraser ? cpEraserSize*2 : 3;ctx.beginPath();ctx.moveTo(lx,ly);ctx.lineTo(p.x,p.y);ctx.stroke();lx=p.x;ly=p.y;};
       c.onmouseup = function(){drawing=false;};
       c.onmouseleave = function(){drawing=false;};
     });
@@ -731,7 +749,7 @@ function cpBack() {
   cp.id = 'page-copy-practice';
   cp.className = 'practice-page';
   cp.style.display = 'none';
-  cp.innerHTML = '<h2>✍️ 抄写错题</h2><div class="practice-counter" id="cp-counter">1/3</div><div class="practice-word" id="cp-word">--</div><div class="practice-hint">照着正确答案抄写3遍</div><div class="copy-grid" id="cp-grid"></div><div class="practice-actions"><button class="btn btn-outline" id="cp-eraser-btn" onclick="toggleCpEraser()">🧽 橡皮擦</button><button class="btn btn-primary" onclick="cpNext()">下一题</button><button class="btn btn-outline" onclick="cpBack()">返回</button></div>';
+  cp.innerHTML = '<h2>✍️ 抄写错题</h2><div class="practice-counter" id="cp-counter">1/3</div><div class="practice-word" id="cp-word">--</div><div class="practice-hint">照着正确答案抄写3遍</div><div class="copy-grid" id="cp-grid"></div><div id="cp-eraser-size" style="display:none;align-items:center;gap:10px;margin:10px 2px"><span style="font-size:13px;color:var(--text2);white-space:nowrap">橡皮大小</span><input type="range" id="cp-eraser-range" min="6" max="48" value="10" oninput="setCpEraserSize(this.value)" style="flex:1;accent-color:var(--primary)"><span id="cp-eraser-size-val" style="font-size:13px;min-width:36px;text-align:right;color:var(--text)">10</span></div><div class="practice-actions"><button class="btn btn-outline" id="cp-eraser-btn" onclick="toggleCpEraser()">🧽 橡皮擦</button><button class="btn btn-primary" onclick="cpNext()">下一题</button><button class="btn btn-outline" onclick="cpBack()">返回</button></div>';
   d.parentNode.insertBefore(cp, wp.nextSibling);
 })();
 
@@ -743,9 +761,21 @@ function toggleCpEraser() {
     btn.className = cpEraser ? 'btn btn-danger' : 'btn btn-outline';
     btn.textContent = cpEraser ? '✏️ 橡皮擦（已开启）' : '🧽 橡皮擦';
   }
+  var esEl = document.getElementById('cp-eraser-size');
+  if (esEl) esEl.style.display = cpEraser ? 'flex' : 'none';
   if (cpCanvases && cpCanvases.length > 0) {
     var ctx0 = cpCanvases[0].getContext('2d');
     ctx0.globalCompositeOperation = cpEraser ? 'destination-out' : 'source-over';
+    ctx0.lineWidth = cpEraser ? cpEraserSize * 2 : 3;
+  }
+}
+function setCpEraserSize(v) {
+  cpEraserSize = parseInt(v) || 10;
+  var lbl = document.getElementById('cp-eraser-size-val');
+  if (lbl) lbl.textContent = cpEraserSize;
+  if (cpCanvases && cpCanvases.length > 0) {
+    var ctx0 = cpCanvases[0].getContext('2d');
+    if (cpEraser) ctx0.lineWidth = cpEraserSize * 2;
   }
 }
 
@@ -1297,6 +1327,8 @@ function clearAllData() {
   var setupView = document.getElementById('dictation-setup');
   if (playView) playView.style.display = 'none';
   if (setupView) setupView.style.display = '';
+  var reviewView = document.getElementById('dictation-review');
+  if (reviewView) reviewView.style.display = 'none';
   // 刷新所有依赖 words/wrongBook 的视图，确保清除后各处立即为空
   renderWordList();
   renderStats();
@@ -1598,7 +1630,7 @@ function submitAnswer() {
   if (!input) {
     // 课文默写：返回上一题后若已写过手写，则保留手写直接前进（无需重复填写）
     if (item.type === 'textbook' && dictResults[dictIdx] && dictResults[dictIdx].hwImg) {
-      if (dictIdx >= dictList.length - 1) { finishDictation(); return; }
+      if (dictIdx >= dictList.length - 1) { reviewAllDictation(); return; }
       dictIdx++;
       showDictItem();
       return;
@@ -1613,14 +1645,14 @@ function submitAnswer() {
     correct = cleanInput === cleanWord;
   }
   dictResults[dictIdx] = { item: item, answer: input, correct: correct, skipped: false };
-  if (dictIdx >= dictList.length - 1) { finishDictation(); return; }
+  if (dictIdx >= dictList.length - 1) { reviewAllDictation(); return; }
   dictIdx++;
   showDictItem();
 }
 
 function skipWord() {
   dictResults[dictIdx] = { item: dictList[dictIdx], answer: '', correct: false, skipped: true };
-  if (dictIdx >= dictList.length - 1) { finishDictation(); return; }
+  if (dictIdx >= dictList.length - 1) { reviewAllDictation(); return; }
   dictIdx++;
   showDictItem();
 }
@@ -1778,6 +1810,55 @@ function finishDictation() {
 
 }
 
+// ===== 提交前：检查全部题目（可逐题修改） =====
+function reviewAllDictation() {
+  if (dictResults.length === 0) { finishDictation(); return; }
+  document.getElementById('dictation-play').style.display = 'none';
+  var list = document.getElementById('review-all-list');
+  list.innerHTML = dictList.map(function(item, i) {
+    var r = dictResults[i];
+    var hint = item.type === 'textbook' ? '课文默写' : (item.type === 'cn' ? '语文词语' : (item.type === 'en' ? '英语单词' : '英语句子'));
+    var prompt = item.type === 'textbook'
+      ? (item.title && item.title !== item.word ? item.title : (item.collection || '课文默写'))
+      : ('第 ' + (i + 1) + ' 题');
+    var ansHtml;
+    if (!r) {
+      ansHtml = '<span style="color:#888">（未填写）</span>';
+    } else if (r.skipped) {
+      ansHtml = '<span style="color:#b71c1c">（已跳过）</span>';
+    } else if (r.hwImg) {
+      ansHtml = '<img src="' + r.hwImg + '" onclick="showReviewLightbox(' + i + ')" style="max-height:54px;border:1px solid #ccc;border-radius:4px;cursor:pointer" title="点击放大">';
+    } else {
+      ansHtml = (r.answer && r.answer.trim()) ? escapeHtml(r.answer) : '<span style="color:#888">（未填写）</span>';
+    }
+    return '<div class="review-item" style="align-items:center">' +
+      '<div style="width:26px;height:26px;border-radius:50%;background:var(--surface-2);color:var(--text);display:flex;align-items:center;justify-content:center;font-size:13px;font-weight:600;flex-shrink:0">' + (i + 1) + '</div>' +
+      '<div style="flex:1;min-width:0;margin:0 10px">' +
+        '<div class="review-q">' + escapeHtml(prompt) + ' <span style="font-size:11px;color:var(--text2)">· ' + hint + '</span></div>' +
+        '<div class="result-a" style="font-size:15px;white-space:pre-wrap;word-break:break-word">' + ansHtml + '</div>' +
+      '</div>' +
+      '<button class="btn btn-xs btn-outline" onclick="modifyReviewItem(' + i + ')">修改</button>' +
+    '</div>';
+  }).join('');
+  document.getElementById('dictation-review').style.display = '';
+}
+function modifyReviewItem(i) {
+  if (i < 0 || i >= dictList.length) return;
+  dictIdx = i;
+  document.getElementById('dictation-review').style.display = 'none';
+  document.getElementById('dictation-play').style.display = '';
+  showDictItem();
+}
+function backToDictationFromReview() {
+  document.getElementById('dictation-review').style.display = 'none';
+  document.getElementById('dictation-play').style.display = '';
+  showDictItem();
+}
+function confirmReviewSubmit() {
+  document.getElementById('dictation-review').style.display = 'none';
+  finishDictation();
+}
+
 function resetDictation() {
   document.getElementById('dictation-result').style.display = 'none';
   document.getElementById('dictation-setup').style.display = '';
@@ -1786,12 +1867,18 @@ function resetDictation() {
 
 // ===== Handwriting =====
 var hwEraserMode = false;
+var hwEraserSize = 10; // 橡皮大小（CSS px），画布内按 ×2 换算为 lineWidth
 var hwRestoreImg = null; // 返回上一题时，上一题已手写的内容（参考预览）
 function toggleEraser() {
   hwEraserMode = !hwEraserMode;
   var btn = document.getElementById('hw-eraser-btn');
-  if(hwEraserMode) { btn.textContent = '橡皮 ON'; btn.style.background = '#ffcdd2'; }
-  else { btn.textContent = '橡皮'; btn.style.background = ''; }
+  if(hwEraserMode) { btn.textContent = '橡皮 ON'; btn.style.background = '#ffcdd2'; document.getElementById('hw-eraser-size').style.display = 'flex'; }
+  else { btn.textContent = '橡皮'; btn.style.background = ''; document.getElementById('hw-eraser-size').style.display = 'none'; }
+}
+function setHwEraserSize(v) {
+  hwEraserSize = parseInt(v) || 10;
+  var lbl = document.getElementById('hw-eraser-size-val');
+  if (lbl) lbl.textContent = hwEraserSize;
 }
 function hwOpen() {
   if (dictIdx >= dictList.length) return;
@@ -1908,7 +1995,7 @@ function bindHwCanvas(canvas, ctx) {
     return {x:(e.clientX-r.left)*sx, y:(e.clientY-r.top)*sy};
   }
   function applyStyle() {
-    if(hwEraserMode) { ctx.strokeStyle='#fafafa'; ctx.lineWidth=20; }
+    if(hwEraserMode) { ctx.strokeStyle='#fafafa'; ctx.lineWidth = hwEraserSize * 2; }
     else { ctx.strokeStyle='#212121'; ctx.lineWidth=4; }
   }
   canvas.ontouchstart = function(e) { e.preventDefault(); drawing=true; var p=pos(e); lx=p.x; ly=p.y; };
@@ -1953,6 +2040,8 @@ function hwClear() {
   hwEraserMode = false;
   var eBtn = document.getElementById('hw-eraser-btn');
   if (eBtn) { eBtn.textContent = '橡皮'; eBtn.style.background = ''; }
+  var esEl = document.getElementById('hw-eraser-size');
+  if (esEl) esEl.style.display = 'none';
   hwDisarmClear();
 }
 
@@ -1973,7 +2062,7 @@ async function hwSubmit() {
     skipped: false
   };
   hwClose();
-  if (dictIdx >= dictList.length - 1) { finishDictation(); return; }
+  if (dictIdx >= dictList.length - 1) { reviewAllDictation(); return; }
   dictIdx++;
   showDictItem();
 }

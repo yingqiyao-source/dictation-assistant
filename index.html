@@ -409,7 +409,7 @@ textarea{resize:vertical;min-height:80px}
 
 <script>// ===== Selection =====
 let selectedWordIndices = new Set();
-const APP_VERSION = '1.0.23';
+const APP_VERSION = '1.0.24';
 
 function onWordCheck(cb) {
   var idx = parseInt(cb.dataset.idx);
@@ -519,39 +519,69 @@ function startWrongPractice(results) {
 }
 
 // ===== Wrong Book (错题集) =====
+function getWrongItems() {
+  // 错题集合 = words 里 collection==='错题' 的条目（from 字段保留原集合路径）
+  return words.filter(function(w) { return w.collection === '错题'; });
+}
 function renderWrongBook() {
   var list = document.getElementById('wrongbook-list');
   var empty = document.getElementById('wrongbook-empty');
   if (!list) return;
-  if (wrongBook.length === 0) { list.innerHTML = ''; empty.style.display = ''; return; }
+  var wb = getWrongItems();
+  if (wb.length === 0) { list.innerHTML = ''; empty.style.display = ''; return; }
   empty.style.display = 'none';
-  list.innerHTML = wrongBook.map(function(w, i) {
+  list.innerHTML = wb.map(function(w, i) {
     return '<div class="review-item"><div class="mark wrong">✗</div>' +
       '<div style="flex:1;min-width:0"><div class="review-q">' + escapeHtml(w.word) + '</div>' +
-      '<div class="result-a" style="font-size:12px">类型:' + escapeHtml(w.type||'-') + (w.collection ? (' · ' + escapeHtml(w.collection)) : '') + ' · 错' + (w.wrongCount||1) + '次</div></div>' +
+      '<div class="result-a" style="font-size:12px">类型:' + escapeHtml(w.type||'-') +
+      (w.from ? (' · 来源：' + escapeHtml(w.from)) : '') + ' · 错' + (w.wrongCount||1) + '次</div></div>' +
       '<button class="btn btn-xs" onclick="practiceWrongItem(' + i + ')">练习</button>' +
       '<button class="btn btn-xs btn-outline" onclick="removeWrongItem(' + i + ')">已掌握</button></div>';
   }).join('');
 }
+// 错题集合复用普通默写流程：答对自动移出、答错保留（见 syncWrongItem）
 function startWrongBookPractice() {
-  if (wrongBook.length === 0) { alert('错题集为空'); return; }
-  practiceReturn = 'wrongbook';
-  startWrongPractice(wrongBook.map(function(w) { return { item: w, answer: null, correct: false, skipped: false }; }));
+  var items = getWrongItems();
+  if (items.length === 0) { alert('错题集为空'); return; }
+  dictList = items.slice();
+  dictIdx = 0;
+  dictResults = dictList.map(function() { return null; });
+  dictStartTime = Date.now();
+  var pb = document.getElementById('page-wrongbook'); if (pb) pb.style.display = 'none';
+  document.getElementById('dictation-setup').style.display = 'none';
+  document.getElementById('dictation-play').style.display = '';
+  showDictItem();
 }
 function practiceWrongItem(i) {
-  var w = wrongBook[i];
+  var items = getWrongItems();
+  var w = items[i];
   if (!w) return;
-  practiceReturn = 'wrongbook';
-  startWrongPractice([{ item: w, answer: null, correct: false, skipped: false }]);
+  dictList = [w];
+  dictIdx = 0;
+  dictResults = [null];
+  dictStartTime = Date.now();
+  var pb = document.getElementById('page-wrongbook'); if (pb) pb.style.display = 'none';
+  document.getElementById('dictation-setup').style.display = 'none';
+  document.getElementById('dictation-play').style.display = '';
+  showDictItem();
 }
 function removeWrongItem(i) {
-  if (i >= 0 && i < wrongBook.length) { wrongBook.splice(i, 1); localStorage.setItem('dictation_wrong_book', JSON.stringify(wrongBook)); renderWrongBook(); }
+  var wb = getWrongItems();
+  var w = wb[i];
+  if (!w) return;
+  var idx = words.indexOf(w);
+  if (idx >= 0) { words.splice(idx, 1); saveData(); }
+  renderWrongBook();
 }
 function clearWrongBook() {
-  if (wrongBook.length === 0) return;
+  var wb = getWrongItems();
+  if (wb.length === 0) return;
   if (!confirm('确定清空错题集？此操作不可恢复。')) return;
-  wrongBook = [];
-  localStorage.setItem('dictation_wrong_book', JSON.stringify(wrongBook));
+  for (var i = wb.length - 1; i >= 0; i--) {
+    var idx = words.indexOf(wb[i]);
+    if (idx >= 0) words.splice(idx, 1);
+  }
+  saveData();
   renderWrongBook();
 }
 
@@ -789,12 +819,31 @@ var hwPageIdx = 0;
 var hwAllCanvases = [];
 var hwMergeVertical = false;
 let words = [];
-let wrongBook = [];
-try { wrongBook = JSON.parse(localStorage.getItem('dictation_wrong_book') || '[]'); } catch(e) {}
+// 错题集合：作为 words 里 collection==='错题' 的词语存在（保留原集合路径到 from 字段），
+// 可直接在集合树里看到并像普通集合一样默写；默写时答对自动移出、答错保留。
 let editWordIdx = -1;
 let history = [];
 try { words = JSON.parse(localStorage.getItem('dictation_words') || '[]'); } catch(e) {}
 try { history = JSON.parse(localStorage.getItem('dictation_history') || '[]'); } catch(e) {}
+// 兼容迁移：旧版独立 wrongBook 数组若存在，则并入 words（仅首次，需在 words 加载之后执行）
+function migrateWrongBook(){
+  try {
+    var old = JSON.parse(localStorage.getItem('dictation_wrong_book') || '[]');
+    if (Array.isArray(old) && old.length) {
+      old.forEach(function(w){
+        var from = w.collection || '';
+        var key = (w.word||'') + '|' + from + '|' + (w.type||'');
+        if (!words.some(function(x){ return x.collection === '错题' && x._key === key; })) {
+          words.push({ word:w.word, type:w.type, collection:'错题', from:from, fromType:w.type,
+            title:w.title||'', pinyin:w.pinyin||'', _key:key, wrongCount:w.wrongCount||1,
+            lastWrong:w.lastWrong||Date.now(), addTime:w.addTime||Date.now() });
+        }
+      });
+      localStorage.removeItem('dictation_wrong_book');
+    }
+  } catch(e) {}
+}
+migrateWrongBook();
 // 兼容旧数据：早期版本把"未指定集合"的词写成了字符串"未分类"。
 // 现在"未分类"仅作为词语列表里的显示分组，不再是真实集合值，故还原为空。
 words.forEach(function(w) { if (w.collection === '未分类') w.collection = ''; });
@@ -828,7 +877,6 @@ function moveSelectedToCollection(){
 function saveData() {
   localStorage.setItem('dictation_words', JSON.stringify(words));
   localStorage.setItem('dictation_history', JSON.stringify(history));
-  localStorage.setItem('dictation_wrong_book', JSON.stringify(wrongBook));
 }
 
 function showToast(msg) {
@@ -1314,9 +1362,8 @@ function deleteWord(idx) {
 
 function clearAllData() {
   if (!confirm('确定清除所有数据？')) return;
-  words = [];
+  words = words.filter(function(w){ return w.collection !== '错题'; });
   history = [];
-  wrongBook = [];
   saveData();
   // 重置进行中的默写/错题练习会话，避免页面残留旧题
   dictList = [];
@@ -1331,7 +1378,7 @@ function clearAllData() {
   if (setupView) setupView.style.display = '';
   var reviewView = document.getElementById('dictation-review');
   if (reviewView) reviewView.style.display = 'none';
-  // 刷新所有依赖 words/wrongBook 的视图，确保清除后各处立即为空
+  // 刷新所有依赖 words 的视图（含错题集合），确保清除后各处立即为空
   renderWordList();
   renderStats();
   updateCollectionList();
@@ -1586,12 +1633,13 @@ function showDictItem() {
   // 课文默写：隐藏答案，只显示标题
   if (item.type === 'textbook') {
     var hasTitle = item.title && item.title !== item.word && item.title.trim() !== '';
-    var hasColl = !!(item.collection && item.collection.trim());
+    var dispColl = item.from || item.collection;
+    var hasColl = !!(dispColl && dispColl.trim());
     var displayTitle;
     if (hasTitle) {
       displayTitle = '📝 ' + item.title;
     } else if (hasColl) {
-      displayTitle = '📖 ' + item.collection;
+      displayTitle = '📖 ' + dispColl;
     } else {
       // 没有独立标题，不暴露任何答案内容
       displayTitle = '📖 请凭记忆默写以下课文';
@@ -1604,7 +1652,8 @@ function showDictItem() {
     document.getElementById('dict-prompt').style.fontSize = '';
     document.getElementById('dict-prompt').style.fontWeight = '';
   }
-  document.getElementById('dict-hint').textContent = item.type === 'textbook' ? '课文默写（凭记忆写出内容）' : (item.type === 'cn' ? '语文词语' : (item.type === 'en' ? '英语单词' : '英语句子'));
+  var baseHint = item.type === 'textbook' ? '课文默写（凭记忆写出内容）' : (item.type === 'cn' ? '语文词语' : (item.type === 'en' ? '英语单词' : '英语句子'));
+  document.getElementById('dict-hint').textContent = item.from ? (baseHint + ' · 来源：' + item.from) : baseHint;
   var di = document.getElementById('dict-input');
   // 返回上一题时回填已写答案（跳过题保持空白）
   var prev = dictResults[dictIdx];
@@ -1764,19 +1813,57 @@ function updateSpeakButtons() {
   });
 }
 
-function syncWrongBookItem(r) {
-  if (!r) return;
-  var it = r.item || {};
-  var key = (it.word||'') + '|' + (it.collection||'') + '|' + (it.type||'');
-  var wi = -1;
-  for (var i = 0; i < wrongBook.length; i++) { if (wrongBook[i]._key === key) { wi = i; break; } }
-  if (r.correct === true) {
-    if (wi >= 0) wrongBook.splice(wi, 1);
-  } else if (r.correct === false || r.skipped) {
-    if (wi >= 0) { wrongBook[wi].wrongCount = (wrongBook[wi].wrongCount||1) + 1; wrongBook[wi].lastWrong = Date.now(); }
-    else wrongBook.push({ _key:key, word:it.word, pinyin:it.pinyin||'', collection:it.collection||'', type:it.type||'', title:it.title||'', wrongCount:1, lastWrong:Date.now(), addTime:Date.now() });
+// 把答错/跳过的题复制进「错题」集合（保留原集合路径到 from 字段），已存在则错误次数+1
+function copyToWrongCollection(item) {
+  var from = item.collection || '';
+  var key = (item.word||'') + '|' + from + '|' + (item.type||'');
+  for (var i = 0; i < words.length; i++) {
+    if (words[i].collection === '错题' && words[i]._key === key) {
+      words[i].wrongCount = (words[i].wrongCount || 1) + 1;
+      words[i].lastWrong = Date.now();
+      saveData();
+      return;
+    }
   }
-  // correct === null：尚未批改，不操作错题集
+  words.push({
+    word: item.word, type: item.type, collection: '错题',
+    from: from, fromType: item.type, title: item.title || '',
+    pinyin: item.pinyin || '', _key: key, wrongCount: 1,
+    lastWrong: Date.now(), addTime: Date.now()
+  });
+  saveData();
+}
+// 从 words 中移除一个错题条目（默写错题集合答对后调用）
+function removeWrongFromWords(it) {
+  var idx = words.indexOf(it);
+  if (idx >= 0) { words.splice(idx, 1); saveData(); }
+}
+// 同步单题结果到错题集合：
+// - 普通练习：答错/跳过 → 复制进「错题」集合（保留 from 原路径）；答对不处理
+// - 正在默写「错题」集合（item.collection==='错题'）：答对 → 移出（已掌握）；答错/跳过 → 保留并错误次数+1
+// - correct===null（手写待批改）不处理，等结果页手动判定
+function syncWrongItem(r) {
+  if (!r || !r.item) return;
+  var it = r.item;
+  if (it.collection === '错题') {
+    if (r.correct === true) {
+      removeWrongFromWords(it);
+    } else if (r.correct === false || r.skipped) {
+      it.wrongCount = (it.wrongCount || 1) + 1;
+      it.lastWrong = Date.now();
+      saveData();
+    }
+    return;
+  }
+  if (r.correct === true) {
+    // 普通练习判对：若该词已存在于「错题」集合（同一 word|from|type 键），移出（已掌握）
+    var key = (it.word||'') + '|' + (it.collection||'') + '|' + (it.type||'');
+    for (var i = 0; i < words.length; i++) {
+      if (words[i].collection === '错题' && words[i]._key === key) { words.splice(i, 1); saveData(); break; }
+    }
+    return;
+  }
+  if (r.correct === false || r.skipped) copyToWrongCollection(it);
 }
 
 function manualMark(idx, isCorrect) {
@@ -1788,7 +1875,7 @@ function manualMark(idx, isCorrect) {
       return;
     }
     dictResults[idx].correct = isCorrect;
-    syncWrongBookItem(dictResults[idx]);
+    syncWrongItem(dictResults[idx]);
     saveData();
     renderResultPage();
   }
@@ -1812,7 +1899,7 @@ function renderResultPage() {
     }
     return '<div class="review-item">' +
       '<div class="mark ' + (r.correct===true ? 'right' : (r.correct===false ? 'wrong' : 'pending')) + '">' + (r.correct===true ? '✓' : (r.correct===false ? '✗' : '?')) + '</div>' +
-      '<div><div class="review-q">' + (i+1) + '. ' + escapeHtml(r.item.word) + '</div>' +
+      '<div><div class="review-q">' + (i+1) + '. ' + escapeHtml(r.item.word) + (r.item.from ? (' <span class="tag tag-collection">来源：' + escapeHtml(r.item.from) + '</span>') : '') + '</div>' +
       (r.hwImg ? '<div class="result-hw-img"><img src="' + r.hwImg + '" onclick="showReviewLightbox(' + i + ')" style="max-height:60px;margin:4px 0;border:1px solid #ccc;border-radius:4px;cursor:pointer" title="点击放大"></div>' : '') +
       (r.skipped ? '<div class="result-a">已跳过</div>' : (r.hwImg ? '<div class="result-a">你的答案：见手写图</div>' : '<div class="result-a">你的答案：' + escapeHtml(r.answer || '（无）') + '</div>')) +
       (r.ocrText ? '<div class="result-ocr">OCR：' + escapeHtml(r.ocrText) + ' (score:' + (r.score||0).toFixed(2) + ')</div>' : '') +
@@ -1829,7 +1916,7 @@ function finishDictation() {
   // 手写题 correct===null 表示待人工批改，此处不自动判分、不写入错题集，
   // 由用户在结果页逐题点「✓ 判对 / ✗ 判错」决定（已取消 OCR 自动批改）
   dictResults.forEach(function(r) {
-    if (r) syncWrongBookItem(r);
+    if (r) syncWrongItem(r);
   });
   saveData();
   history.push({ date: Date.now(), score: stats.score, total: stats.total, correct: stats.correct });

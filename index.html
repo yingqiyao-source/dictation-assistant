@@ -409,7 +409,7 @@ textarea{resize:vertical;min-height:80px}
 
 <script>// ===== Selection =====
 let selectedWordIndices = new Set();
-const APP_VERSION = '1.0.24';
+const APP_VERSION = '1.0.25';
 
 function onWordCheck(cb) {
   var idx = parseInt(cb.dataset.idx);
@@ -521,7 +521,17 @@ function startWrongPractice(results) {
 // ===== Wrong Book (错题集) =====
 function getWrongItems() {
   // 错题集合 = words 里 collection==='错题' 的条目（from 字段保留原集合路径）
-  return words.filter(function(w) { return w.collection === '错题'; });
+  // 去重：同一 word|from|type 只保留一条，防止历史中间版本写入的重复错题副本导致"重复默写"
+  var seen = {};
+  var out = [];
+  words.forEach(function(w) {
+    if (w.collection !== '错题') return;
+    var key = w._key || ((w.word || '') + '|' + (w.from || w.collection || '') + '|' + (w.type || ''));
+    if (seen[key]) return;
+    seen[key] = true;
+    out.push(w);
+  });
+  return out;
 }
 function renderWrongBook() {
   var list = document.getElementById('wrongbook-list');
@@ -825,25 +835,7 @@ let editWordIdx = -1;
 let history = [];
 try { words = JSON.parse(localStorage.getItem('dictation_words') || '[]'); } catch(e) {}
 try { history = JSON.parse(localStorage.getItem('dictation_history') || '[]'); } catch(e) {}
-// 兼容迁移：旧版独立 wrongBook 数组若存在，则并入 words（仅首次，需在 words 加载之后执行）
-function migrateWrongBook(){
-  try {
-    var old = JSON.parse(localStorage.getItem('dictation_wrong_book') || '[]');
-    if (Array.isArray(old) && old.length) {
-      old.forEach(function(w){
-        var from = w.collection || '';
-        var key = (w.word||'') + '|' + from + '|' + (w.type||'');
-        if (!words.some(function(x){ return x.collection === '错题' && x._key === key; })) {
-          words.push({ word:w.word, type:w.type, collection:'错题', from:from, fromType:w.type,
-            title:w.title||'', pinyin:w.pinyin||'', _key:key, wrongCount:w.wrongCount||1,
-            lastWrong:w.lastWrong||Date.now(), addTime:w.addTime||Date.now() });
-        }
-      });
-      localStorage.removeItem('dictation_wrong_book');
-    }
-  } catch(e) {}
-}
-migrateWrongBook();
+// （已移除旧版独立 wrongBook 的迁移：自 v1.0.25 起不再支持旧 dictation_wrong_book 数据）
 // 兼容旧数据：早期版本把"未指定集合"的词写成了字符串"未分类"。
 // 现在"未分类"仅作为词语列表里的显示分组，不再是真实集合值，故还原为空。
 words.forEach(function(w) { if (w.collection === '未分类') w.collection = ''; });
@@ -1601,7 +1593,8 @@ function startDictation() {
   dictList = words.filter(function(w) {
     var typeOk = type === 'all' || w.type === type || (type === 'en' && (w.type === 'en' || w.type === 'en-sentence')) || (type === 'cn' && w.type === 'textbook');
     var coll = w.collection || '';
-    var colOk = allSelected || selectedCols.some(function(sc) { return coll === sc || coll.startsWith(sc + '/'); });
+    // 「错题」是派生复习集合，不属于原始内容；选"全部"时排除，避免与原始集合里的同一词重复默写
+    var colOk = allSelected ? (coll !== '错题') : selectedCols.some(function(sc) { return coll === sc || coll.startsWith(sc + '/'); });
     return typeOk && colOk;
   });
   if (dictList.length === 0) { alert('没有可默写的词语'); return; }
@@ -1818,11 +1811,15 @@ function copyToWrongCollection(item) {
   var from = item.collection || '';
   var key = (item.word||'') + '|' + from + '|' + (item.type||'');
   for (var i = 0; i < words.length; i++) {
-    if (words[i].collection === '错题' && words[i]._key === key) {
-      words[i].wrongCount = (words[i].wrongCount || 1) + 1;
-      words[i].lastWrong = Date.now();
-      saveData();
-      return;
+    if (words[i].collection === '错题') {
+      // 兼容：部分历史错题副本可能缺 _key，按 word|from|type 兜底匹配，避免重复写入
+      var ek = words[i]._key || ((words[i].word||'') + '|' + (words[i].from || words[i].collection || '') + '|' + (words[i].type||''));
+      if (ek === key) {
+        words[i].wrongCount = (words[i].wrongCount || 1) + 1;
+        words[i].lastWrong = Date.now();
+        saveData();
+        return;
+      }
     }
   }
   words.push({

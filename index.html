@@ -357,7 +357,7 @@ textarea{resize:vertical;min-height:80px}
       <button id="hw-clear-btn" class="hw-btn hw-btn-outline" onclick="hwClear()" >清除</button>
       <button class="hw-btn hw-btn-outline" id="hw-eraser-btn" onclick="toggleEraser()" >橡皮</button>
       <button class="hw-btn hw-btn-primary" id="hw-submit-btn" onclick="hwSubmit()" >提交并下一题</button>
-      <button class="hw-btn hw-btn-outline" onclick="hwClose()" >取消</button>
+      <button class="hw-btn hw-btn-outline" id="hw-cancel-btn" onclick="hwCancelAsk()" >取消</button>
     </div>
   </div>
 </div>
@@ -409,7 +409,7 @@ textarea{resize:vertical;min-height:80px}
 
 <script>// ===== Selection =====
 let selectedWordIndices = new Set();
-const APP_VERSION = '1.0.25';
+const APP_VERSION = '1.0.26';
 
 function onWordCheck(cb) {
   var idx = parseInt(cb.dataset.idx);
@@ -828,6 +828,9 @@ var hwPages = [];
 var hwPageIdx = 0;
 var hwAllCanvases = [];
 var hwMergeVertical = false;
+var hwDrafts = {};        // 取消/返回时暂存的手写草稿：键为 dictIdx，值为各画布 dataURL 数组（重开同一题时绘回）
+var hwCancelArmed = false; // 取消按钮二次确认状态
+var hwCancelTimer = null;
 let words = [];
 // 错题集合：作为 words 里 collection==='错题' 的词语存在（保留原集合路径到 from 字段），
 // 可直接在集合树里看到并像普通集合一样默写；默写时答对自动移出、答错保留。
@@ -1993,6 +1996,7 @@ function setHwEraserSize(v) {
 function hwOpen() {
   if (dictIdx >= dictList.length) return;
   hwDisarmClear();
+  hwDisarmCancel(); // 打开时复位取消按钮（避免上次 armed 残留）
   var item = dictList[dictIdx];
   var word = item.word;
   var isLong = word.length > 6 || item.type === 'en-sentence';
@@ -2079,6 +2083,14 @@ function renderHwPage(idx) {
       ctx.lineJoin = 'round';
       ctx.fillStyle = '#fafafa';
       ctx.fillRect(0, 0, c.width, c.height);
+      // 取消/返回后重开：恢复上次手写草稿（按全局画布序号对齐 hwDrafts[dictIdx]）
+      var k = hwAllCanvases.indexOf(c);
+      var draft = (hwDrafts[dictIdx] && hwDrafts[dictIdx][k]) ? hwDrafts[dictIdx][k] : null;
+      if (draft) {
+        var img = new Image();
+        img.onload = function() { ctx.drawImage(img, 0, 0, c.width, c.height); };
+        img.src = draft;
+      }
       c._inited = true;
       bindHwCanvas(c, ctx);
     });
@@ -2173,6 +2185,7 @@ async function hwSubmit() {
     correct: null,  // null = 待人工批改（已取消 OCR 自动判分）
     skipped: false
   };
+  hwSaveDraft(); // 提交后也暂存草稿，重开同一题可恢复手写
   hwClose();
   if (dictIdx >= dictList.length - 1) { reviewAllDictation(); return; }
   dictIdx++;
@@ -2293,7 +2306,39 @@ function levenshtein(a, b) {
   return d[m][n];
 }
 
+// 将当前手写画布暂存为草稿（取消/返回后可恢复），按 dictIdx 存各画布 dataURL
+function hwSaveDraft() {
+  try {
+    if (!hwAllCanvases.length) return;
+    hwDrafts[dictIdx] = hwAllCanvases.map(function(c) { return c.toDataURL('image/png'); });
+  } catch (e) {}
+}
+
+// 取消按钮：首次点进入确认态，二次点才真正关闭（并先保留手写草稿）
+function hwCancelAsk() {
+  if (!hwCancelArmed) {
+    hwCancelArmed = true;
+    var btn = document.getElementById('hw-cancel-btn');
+    if (btn) { btn.textContent = '确认取消？'; btn.style.background = '#ffcdd2'; btn.style.color = '#b71c1c'; }
+    if (hwCancelTimer) clearTimeout(hwCancelTimer);
+    hwCancelTimer = setTimeout(hwDisarmCancel, 3000);
+    return;
+  }
+  // 二次确认：先保留手写，再关闭
+  hwSaveDraft();
+  hwClose();
+  hwDisarmCancel();
+}
+
+function hwDisarmCancel() {
+  hwCancelArmed = false;
+  if (hwCancelTimer) { clearTimeout(hwCancelTimer); hwCancelTimer = null; }
+  var btn = document.getElementById('hw-cancel-btn');
+  if (btn) { btn.textContent = '取消'; btn.style.background = ''; btn.style.color = ''; }
+}
+
 function hwClose() {
+  hwDisarmCancel();
   document.getElementById('hw-overlay').classList.remove('show');
 }
 

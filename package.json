@@ -1,6 +1,6 @@
 {
   "name": "dictation-assistant",
-  "version": "1.0.21",
+  "version": "1.0.22",
   "description": "面向中小学的语文+英语默写练习工具（单文件网页应用，支持语音朗读、手写板、OCR 批改、错题订正）",
   "main": "index.html",
   "scripts": {

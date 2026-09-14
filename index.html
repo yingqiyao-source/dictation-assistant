@@ -409,7 +409,7 @@ textarea{resize:vertical;min-height:80px}
 
 <script>// ===== Selection =====
 let selectedWordIndices = new Set();
-const APP_VERSION = '1.0.26';
+const APP_VERSION = '1.0.27';
 
 function onWordCheck(cb) {
   var idx = parseInt(cb.dataset.idx);
@@ -555,6 +555,7 @@ function startWrongBookPractice() {
   if (items.length === 0) { alert('错题集为空'); return; }
   dictList = items.slice();
   dictIdx = 0;
+  hwDrafts = {}; // 新会话：清空上一会话的手写草稿
   dictResults = dictList.map(function() { return null; });
   dictStartTime = Date.now();
   var pb = document.getElementById('page-wrongbook'); if (pb) pb.style.display = 'none';
@@ -568,6 +569,7 @@ function practiceWrongItem(i) {
   if (!w) return;
   dictList = [w];
   dictIdx = 0;
+  hwDrafts = {}; // 新会话：清空上一会话的手写草稿
   dictResults = [null];
   dictStartTime = Date.now();
   var pb = document.getElementById('page-wrongbook'); if (pb) pb.style.display = 'none';
@@ -1366,6 +1368,7 @@ function clearAllData() {
   dictIdx = 0;
   dictStartTime = 0;
   hwRestoreImg = null;
+  hwDrafts = {}; // 清空进行中的手写草稿
   // 若正停留在默写/练习页（dictation-play 可见），退回设置前的默写设置页，避免残页
   var playView = document.getElementById('dictation-play');
   var setupView = document.getElementById('dictation-setup');
@@ -1610,6 +1613,7 @@ function startDictation() {
     dictList = shuffled.slice(0, count);
   }
   dictIdx = 0;
+  hwDrafts = {}; // 新默写会话：清空上一会话的手写草稿，避免跨会话串题
   // 预分配结果数组，按题号原地覆盖（支持返回上一题修改）
   dictResults = dictList.map(function() { return null; });
   dictStartTime = Date.now();

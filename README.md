@@ -104,6 +104,11 @@ dictation-assistant/
 
 ## 📌 更新日志 (Changelog)
 
+### v1.0.27（2026-09-14）
+- **修复「重新默写时手写板串入上一会话草稿」。** 根因：手写草稿 `hwDrafts` 按会话内索引 `dictIdx` 缓存，但每次开启新默写会话 `dictIdx` 都会重置为 0，而 `hwDrafts` 是全局、跨会话不清空，导致新会话第一题把上一会话同一 `dictIdx` 的草稿绘回来。
+  - 修复：在三个新会话起点（`startDictation`、`startWrongBookPractice`、`practiceWrongItem`）与「清除所有数据」(`clearAllData`) 中统一置 `hwDrafts = {}`；会话内「取消/返回重开同一题保留草稿」的行为不受影响（同一会话内 `dictIdx` 稳定）。
+  - 验证：新增 `_github_review/test_v1027.js`（jsdom 全 PASS：首会话写字存草稿、重新默写后 `hwDrafts` 已空、新会话首题不再绘回旧草稿）。
+
 ### v1.0.26（2026-09-11）
 - **手写答案「取消」按钮防误触 + 取消后保留手写内容。**
   - 取消按钮改为二次确认：首次点击变为「确认取消？」（红色高亮，3 秒后自动复位），再次点击才真正关闭，避免误点丢字。

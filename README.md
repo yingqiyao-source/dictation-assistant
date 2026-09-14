@@ -104,6 +104,12 @@ dictation-assistant/
 
 ## 📌 更新日志 (Changelog)
 
+### v1.0.28（2026-09-14）
+- **修复「检查全部题目」时点开缩略图看不到答案。** 自检页（提交前逐题检查）手写缩略图点击放大后，正确答案依赖 `dictResults[i].item.word`；若该字段缺失则答案框被隐藏，只剩学生手写图、看不到正确答案，自检失去意义。
+  - `showReviewLightbox` 取答案改为优先用传入值、其次取 `dictList[i].word` 权威源、再退 `r.item.word`/`r.answer`，确保任何数据下都能显示正确答案。
+  - 检查页每项直接内联显示「✅ 答案：…」，自检无需点击即可逐题核对。
+  - 验证：新增 `_github_review/test_v1028.js`（jsdom 7 断言全 PASS：检查页内联显示手写/文字题正确答案、点击缩略图正常显示答案、item 缺失时仍取自 dictList 显示答案、dictResults 缺失不崩溃）。
+
 ### v1.0.27（2026-09-14）
 - **修复「重新默写时手写板串入上一会话草稿」。** 根因：手写草稿 `hwDrafts` 按会话内索引 `dictIdx` 缓存，但每次开启新默写会话 `dictIdx` 都会重置为 0，而 `hwDrafts` 是全局、跨会话不清空，导致新会话第一题把上一会话同一 `dictIdx` 的草稿绘回来。
   - 修复：在三个新会话起点（`startDictation`、`startWrongBookPractice`、`practiceWrongItem`）与「清除所有数据」(`clearAllData`) 中统一置 `hwDrafts = {}`；会话内「取消/返回重开同一题保留草稿」的行为不受影响（同一会话内 `dictIdx` 稳定）。

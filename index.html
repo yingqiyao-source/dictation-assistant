@@ -409,7 +409,7 @@ textarea{resize:vertical;min-height:80px}
 
 <script>// ===== Selection =====
 let selectedWordIndices = new Set();
-const APP_VERSION = '1.0.29';
+const APP_VERSION = '1.0.30';
 
 function onWordCheck(cb) {
   var idx = parseInt(cb.dataset.idx);
@@ -1359,7 +1359,7 @@ function deleteWord(idx) {
 
 function clearAllData() {
   if (!confirm('确定清除所有数据？')) return;
-  words = words.filter(function(w){ return w.collection !== '错题'; });
+  words = []; // 清除所有词语（含错题集合），与"清除所有数据"语义一致
   history = [];
   saveData();
   // 重置进行中的默写/错题练习会话，避免页面残留旧题

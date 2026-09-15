@@ -409,7 +409,7 @@ textarea{resize:vertical;min-height:80px}
 
 <script>// ===== Selection =====
 let selectedWordIndices = new Set();
-const APP_VERSION = '1.0.30';
+const APP_VERSION = '1.0.31';
 
 function onWordCheck(cb) {
   var idx = parseInt(cb.dataset.idx);
@@ -1582,10 +1582,12 @@ function saveWord() {
 // ===== Dictation =====
 let dictList = [];
 let dictIdx = 0;
+var reviewModifyMode = false; // 检查页「修改单题」模式：进入时置 true，提交该题后直接回检查页而非推进后续所有题
 let dictResults = [];
 let dictStartTime = 0;
 
 function startDictation() {
+  reviewModifyMode = false; // 新默写会话：退出检查页修改模式
   var type = document.getElementById('dict-type').value;
   var count = parseInt(document.getElementById('dict-count').value);
   var selectedCols = [];
@@ -1681,6 +1683,7 @@ function submitAnswer() {
   if (!input) {
     // 课文默写：返回上一题后若已写过手写，则保留手写直接前进（无需重复填写）
     if (item.type === 'textbook' && dictResults[dictIdx] && dictResults[dictIdx].hwImg) {
+      if (reviewModifyMode) { reviewAllDictation(); return; }
       if (dictIdx >= dictList.length - 1) { reviewAllDictation(); return; }
       dictIdx++;
       showDictItem();
@@ -1696,6 +1699,7 @@ function submitAnswer() {
     correct = cleanInput === cleanWord;
   }
   dictResults[dictIdx] = { item: item, answer: input, correct: correct, skipped: false };
+  if (reviewModifyMode) { reviewAllDictation(); return; } // 修改单题：改完直接回检查页
   if (dictIdx >= dictList.length - 1) { reviewAllDictation(); return; }
   dictIdx++;
   showDictItem();
@@ -1703,6 +1707,7 @@ function submitAnswer() {
 
 function skipWord() {
   dictResults[dictIdx] = { item: dictList[dictIdx], answer: '', correct: false, skipped: true };
+  if (reviewModifyMode) { reviewAllDictation(); return; }
   if (dictIdx >= dictList.length - 1) { reviewAllDictation(); return; }
   dictIdx++;
   showDictItem();
@@ -1929,6 +1934,7 @@ function finishDictation() {
 
 // ===== 提交前：检查全部题目（可逐题修改） =====
 function reviewAllDictation() {
+  reviewModifyMode = false; // 回到检查页即退出修改模式
   if (dictResults.length === 0) { finishDictation(); return; }
   document.getElementById('dictation-play').style.display = 'none';
   var list = document.getElementById('review-all-list');
@@ -1961,6 +1967,7 @@ function reviewAllDictation() {
 }
 function modifyReviewItem(i) {
   if (i < 0 || i >= dictList.length) return;
+  reviewModifyMode = true; // 进入「修改单题」模式：提交该题后直接回检查页
   dictIdx = i;
   document.getElementById('dictation-review').style.display = 'none';
   document.getElementById('dictation-play').style.display = '';
@@ -1972,6 +1979,7 @@ function backToDictationFromReview() {
   showDictItem();
 }
 function confirmReviewSubmit() {
+  reviewModifyMode = false;
   document.getElementById('dictation-review').style.display = 'none';
   finishDictation();
 }
@@ -2191,6 +2199,7 @@ async function hwSubmit() {
   };
   hwSaveDraft(); // 提交后也暂存草稿，重开同一题可恢复手写
   hwClose();
+  if (reviewModifyMode) { reviewAllDictation(); return; }
   if (dictIdx >= dictList.length - 1) { reviewAllDictation(); return; }
   dictIdx++;
   showDictItem();

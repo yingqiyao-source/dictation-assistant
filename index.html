@@ -187,6 +187,10 @@ textarea{resize:vertical;min-height:80px}
     <div class="tab active" data-filter="all" >全部</div>
     <div class="tab" data-filter="cn" >语文</div>
     <div class="tab" data-filter="en" >英语</div>
+    <div class="tab" data-filter="uncat" >📋 未分类</div>
+  </div>
+  <div style="margin-bottom:12px" >
+    <input id="word-search" type="search" placeholder="🔍 搜索词语或集合名…" oninput="onWordSearch()" style="width:100%;padding:9px 12px;border-radius:10px;border:1px solid var(--border);background:var(--surface);color:var(--text);font-size:14px;box-sizing:border-box" >
   </div>
   <div style="display:flex;gap:8px;margin-bottom:12px" >
     <button class="btn btn-primary" style="flex:1" onclick="showAddModal('manual')" >+ 添加词语</button>
@@ -330,6 +334,7 @@ textarea{resize:vertical;min-height:80px}
       <option value="" >移动到...</option>
     </select>
     <button class="btn btn-outline btn-sm" onclick="moveSelectedToCollection()" style="margin-left:2px" >移动</button>
+    <button class="btn btn-outline btn-sm" onclick="batchMoveViaPicker()" style="margin-left:2px" >📁 选集合</button>
   </div>
 </div>
 
@@ -409,7 +414,7 @@ textarea{resize:vertical;min-height:80px}
 
 <script>// ===== Selection =====
 let selectedWordIndices = new Set();
-const APP_VERSION = '1.0.31';
+const APP_VERSION = '1.0.32';
 
 function onWordCheck(cb) {
   var idx = parseInt(cb.dataset.idx);
@@ -1188,9 +1193,27 @@ function clearAllCollections() {
 
 // ===== Word List =====
 let wordFilter = 'all';
+var wordSearch = '';
+var currentCollPaths = [];
 function renderWordList() {
   var list = document.getElementById('word-list');
-  var filtered = wordFilter === 'all' ? words : words.filter(function(w) { return w.type === wordFilter || (wordFilter === 'cn' && w.type === 'textbook') || (wordFilter === 'en' && w.type === 'en-sentence'); });
+  currentCollPaths = [];
+  var filtered;
+  if (wordFilter === 'uncat') {
+    filtered = words.filter(function(w) { return !w.collection || !w.collection.trim(); });
+  } else if (wordFilter === 'all') {
+    filtered = words;
+  } else {
+    filtered = words.filter(function(w) { return w.type === wordFilter || (wordFilter === 'cn' && w.type === 'textbook') || (wordFilter === 'en' && w.type === 'en-sentence'); });
+  }
+  if (wordSearch) {
+    var q = wordSearch.toLowerCase();
+    filtered = filtered.filter(function(w) {
+      var text = (w.type === 'textbook' ? (w.title || w.word) : w.word) || '';
+      var coll = w.collection || '';
+      return text.toLowerCase().indexOf(q) >= 0 || coll.toLowerCase().indexOf(q) >= 0;
+    });
+  }
   if (filtered.length === 0) {
     list.innerHTML = '<div class="empty-state"><div class="emoji">📚</div><p>还没有词语哦<br>先去添加一些吧</p></div>';
     return;
@@ -1215,7 +1238,7 @@ function renderWordList() {
     }
   });
 
-  var html = '<div class="select-all-bar"><label style="cursor:pointer"><input type="checkbox" id="cb-select-all" onchange="onSelectAllChange()"> 全选</label></div>';
+  var html = '';
 
   // Recursive render - pure function, no mutation
   function renderLevel(nodeObj, depth) {
@@ -1224,6 +1247,7 @@ function renderWordList() {
     keys.forEach(function(key) {
       var child = nodeObj[key];
       var fullPath = child._fullPath || key;
+      currentCollPaths.push(fullPath);
       var childKeys = Object.keys(child.children || {}).filter(function(k) { return k !== '_fullPath'; });
       var totalItems = child.items.length + childKeys.reduce(function(s, k) { return s + countItems(child.children[k]); }, 0);
       if (totalItems === 0) return;
@@ -1275,7 +1299,10 @@ function renderWordList() {
       '</div></div>';
   }
 
-  list.innerHTML = html;
+  var selectAllBar = '<div class="select-all-bar"><label style="cursor:pointer"><input type="checkbox" id="cb-select-all" onchange="onSelectAllChange()"> 全选</label>' +
+    (currentCollPaths.length > 0 ? '<span style="margin-left:auto;display:flex;gap:10px"><a href="#" onclick="expandAllCollections();return false" style="color:var(--primary);font-size:12px">展开全部</a><a href="#" onclick="collapseAllCollections();return false" style="color:var(--primary);font-size:12px">收起全部</a></span>' : '') +
+    '</div>';
+  list.innerHTML = selectAllBar + html;
   updateCollectionList(wordFilter);
 }
 
@@ -1308,6 +1335,32 @@ function toggleUngrouped(headerEl) {
   if (collapsed) { body.style.display = 'block'; arrow.classList.add('open'); expand.textContent = '收起'; }
   else { body.style.display = 'none'; arrow.classList.remove('open'); expand.textContent = '展开'; }
 }
+function onWordSearch() {
+  var el = document.getElementById('word-search');
+  wordSearch = el ? el.value.trim() : '';
+  renderWordList();
+}
+function expandAllCollections() {
+  collapsedCollections.clear();
+  renderWordList();
+}
+function collapseAllCollections() {
+  currentCollPaths.forEach(function(p) { collapsedCollections.add(p); });
+  renderWordList();
+}
+function batchMoveViaPicker() {
+  if (selectedWordIndices.size === 0) { showToast('请先选择词语'); return; }
+  var n = selectedWordIndices.size;
+  openCollEdit('移动到集合', '', function(finalPath) {
+    if (!finalPath) return;
+    if (!confirm('将选中的 ' + n + ' 个词语移动到「' + finalPath + '」？')) return;
+    selectedWordIndices.forEach(function(i) { if (words[i]) words[i].collection = finalPath; });
+    selectedWordIndices.clear();
+    saveData(); renderWordList(); updateCollectionList(); updateBatchBar();
+    showToast('已移动 ' + n + ' 个词语到「' + finalPath + '」');
+  });
+}
+
 function renderWordItem(w, depth) {
   depth = depth || 0;
   var realIdx = words.indexOf(w);

@@ -233,6 +233,48 @@ textarea{resize:vertical;min-height:80px}
       </div>
       <button class="btn btn-primary btn-block" onclick="startDictation()" >开始默写</button>
     </div>
+    <div class="card" style="margin-top:12px" >
+      <h3 style="margin-bottom:12px" >🎧 语音设置</h3>
+      <div style="margin-bottom:12px" >
+        <label style="font-size:13px;color:var(--text2)" >英文朗读语速 <span id="rate-en-val">0.90</span></label>
+        <input type="range" id="voice-rate-en" min="0.5" max="1.2" step="0.05" value="0.9" oninput="onVoiceSettingChange()" style="width:100%" >
+      </div>
+      <div style="margin-bottom:12px" >
+        <label style="font-size:13px;color:var(--text2)" >中文朗读语速 <span id="rate-zh-val">0.90</span></label>
+        <input type="range" id="voice-rate-zh" min="0.5" max="1.2" step="0.05" value="0.9" oninput="onVoiceSettingChange()" style="width:100%" >
+      </div>
+      <div style="margin-bottom:12px" >
+        <label style="font-size:13px;color:var(--text2)" >英文语音</label>
+        <select id="voice-en" style="margin-top:4px;width:100%" onchange="onVoiceSettingChange()" ></select>
+        <div style="font-size:12px;color:#888;margin-top:4px" >选「自动优选」会优先系统里最自然的神经/在线语音</div>
+      </div>
+      <div style="margin-bottom:12px" >
+        <label style="font-size:13px;color:var(--text2)" >中文语音</label>
+        <select id="voice-zh" style="margin-top:4px;width:100%" onchange="onVoiceSettingChange()" ></select>
+      </div>
+      <div style="margin-bottom:8px" >
+        <label style="font-size:13px;color:var(--text2);display:flex;align-items:center;gap:8px;cursor:pointer" >
+          <input type="checkbox" id="cloud-enable" onchange="onVoiceSettingChange()" > 使用云端高质量语音（英文，需微软 Azure 密钥）
+        </label>
+      </div>
+      <div id="cloud-config" style="display:none;margin-top:8px" >
+        <div style="font-size:12px;color:#c0392b;margin-bottom:8px" >⚠️ 密钥仅保存在本机浏览器，用于向微软云端请求语音；请使用专用密钥，勿用主账号密钥。</div>
+        <label style="font-size:13px;color:var(--text2)" >Azure 区域（如 eastasia）</label>
+        <input id="cloud-region" style="margin-top:4px;width:100%;box-sizing:border-box" placeholder="eastasia" oninput="onVoiceSettingChange()" >
+        <label style="font-size:13px;color:var(--text2);display:block;margin-top:8px" >订阅密钥</label>
+        <input id="cloud-key" type="password" style="margin-top:4px;width:100%;box-sizing:border-box" placeholder="粘贴密钥" oninput="onVoiceSettingChange()" >
+        <label style="font-size:13px;color:var(--text2);display:block;margin-top:8px" >英文音色</label>
+        <select id="cloud-voice" style="margin-top:4px;width:100%;box-sizing:border-box" onchange="onVoiceSettingChange()" >
+          <option value="en-US-AriaNeural">Aria（美式·女声）</option>
+          <option value="en-US-JennyNeural">Jenny（美式·女声）</option>
+          <option value="en-US-GuyNeural">Guy（美式·男声）</option>
+          <option value="en-US-DavisNeural">Davis（美式·男声）</option>
+          <option value="en-US-SaraNeural">Sara（美式·女声）</option>
+          <option value="en-GB-SoniaNeural">Sonia（英式·女声）</option>
+          <option value="en-GB-RyanNeural">Ryan（英式·男声）</option>
+        </select>
+      </div>
+    </div>
   </div>
   <div id="dictation-play" style="display:none" >
     <div class="card dictation-card" >
@@ -414,7 +456,7 @@ textarea{resize:vertical;min-height:80px}
 
 <script>// ===== Selection =====
 let selectedWordIndices = new Set();
-const APP_VERSION = '1.0.32';
+const APP_VERSION = '1.0.33';
 
 function onWordCheck(cb) {
   var idx = parseInt(cb.dataset.idx);
@@ -904,7 +946,7 @@ function switchPage(page) {
   if (page === 'words') renderWordList();
   if (page === 'stats') renderStats();
   if (page === 'wrongbook') renderWrongBook();
-  if (page === 'dictation') updateCollectionList();
+  if (page === 'dictation') { updateCollectionList(); initVoiceSettings(); }
 }
 
 // ===== Collections =====
@@ -1794,27 +1836,49 @@ function playCurrentAudio() {
 
 
 
-// ---- 语音朗读：缓存 voices 并优选高质量语音，解决读音不清晰 ----
+// ---- 语音朗读：缓存 voices 并强力优先高质量（神经/在线）语音，解决英文发音生硬 ----
 var _cachedVoices = [];
+var voiceSettings = { rateEn: 0.9, rateZh: 0.9, voiceEn: '', voiceZh: '', cloudEnabled: false, cloudRegion: '', cloudKey: '', cloudVoice: 'en-US-AriaNeural' };
+function loadVoiceSettings() {
+  try {
+    var s = JSON.parse(localStorage.getItem('dictation_voice_settings') || '{}');
+    if (s && typeof s === 'object') { for (var k in voiceSettings) { if (s[k] !== undefined) voiceSettings[k] = s[k]; } }
+  } catch (e) {}
+}
+function saveVoiceSettings() {
+  try { localStorage.setItem('dictation_voice_settings', JSON.stringify(voiceSettings)); } catch (e) {}
+}
 function _loadVoices() {
   try { _cachedVoices = window.speechSynthesis.getVoices() || []; } catch (e) { _cachedVoices = []; }
 }
 if (typeof window.speechSynthesis !== 'undefined') {
   _loadVoices();
-  window.speechSynthesis.onvoiceschanged = _loadVoices;
+  window.speechSynthesis.onvoiceschanged = function () { _loadVoices(); populateVoiceSelectors(); };
 }
+// 选音：手动指定优先；否则在本语种内优先 神经/在线/自然/ premium，再按具体高质量名单排序
 function _pickVoice(lang) {
   if (typeof window.speechSynthesis === 'undefined') return null;
   if (!_cachedVoices.length) _loadVoices();
+  var isEn = (lang || '').toLowerCase().indexOf('en') === 0;
+  var override = isEn ? voiceSettings.voiceEn : (lang ? voiceSettings.voiceZh : '');
+  if (override) {
+    var ov = _cachedVoices.filter(function (v) { return v.name === override; })[0];
+    if (ov) return ov;
+  }
   var base = (lang || '').toLowerCase().split('-')[0];
   var sameLang = _cachedVoices.filter(function (v) {
-    return v.lang && v.lang.toLowerCase().split('-')[0] === base;
+    var vb = (v.lang || '').toLowerCase().split('-')[0];
+    if (base === 'en') return vb === 'en'; // en-US 请求可接受任何 en-* 语音（如 en-GB 高质量音）
+    return vb === base;
   });
-  if (!sameLang.length) return null;
-  var pref = [/neural/i, /natural/i, /online/i, /premium/i,
-              /xiaoxiao/i, /yunxi/i, /yunyang/i, /yaoyao/i, /kangkang/i,
-              /aria/i, /zira/i, /david/i, /mark/i, /samantha/i,
-              /microsoft/i, /google/i, /apple/i, /huihui/i];
+  if (!sameLang.length) return _cachedVoices.length ? _cachedVoices[0] : null;
+  var pref = [
+    /neural/i, /online/i, /natural/i, /premium/i,
+    /aria/i, /jenny/i, /guy/i, /davis/i, /sara/i, /samantha/i,
+    /google us english/i, /google uk english/i, /google/i,
+    /xiaoxiao/i, /yunxi/i, /yunyang/i, /yaoyao/i, /kangkang/i, /huihui/i,
+    /zira/i, /david/i, /mark/i, /microsoft/i, /apple/i
+  ];
   for (var i = 0; i < pref.length; i++) {
     var hit = sameLang.filter(function (v) { return pref[i].test(v.name); });
     if (hit.length) return hit[0];
@@ -1837,21 +1901,131 @@ function _splitByLang(text) {
   if (buf) runs.push({ text: buf, cjk: cur });
   return runs;
 }
+// 英文长句按从句分句朗读（在逗号/分号/连词处断开并保留标点），弱引擎语调更自然
+function _segmentEnglish(text) {
+  var t = (text || '').trim();
+  if (!t || !/[,.!?;:]/.test(t)) return [t];
+  var raw = t.split(/([,.!?;:]+)/);
+  var segs = [], buf = '';
+  for (var i = 0; i < raw.length; i++) {
+    var s = raw[i];
+    if (!s || !s.trim().length) continue;
+    if (/^[,.!?;:]+$/.test(s)) { buf += s; }
+    else { if (buf.trim().length) segs.push(buf.trim()); buf = s; }
+  }
+  if (buf.trim().length) segs.push(buf.trim());
+  return segs.length ? segs : [t];
+}
+
+// 顺序播放队列：避免浏览器原生队列在 cancel 后丢音，也便于云端/本地混排
+var _speechQueue = [];
+var _speechBusy = false;
+var _speechFirstPending = false;
+function _enqueueSpeech(fn) { _speechQueue.push(fn); _pumpSpeech(); }
+function _pumpSpeech() {
+  if (_speechBusy || !_speechQueue.length) return;
+  _speechBusy = true;
+  var fn = _speechQueue.shift();
+  fn(function () { _speechBusy = false; _pumpSpeech(); });
+}
+function _speakWeb(text, lang, rate, done) {
+  if (typeof window.speechSynthesis === 'undefined') { done(); return; }
+  var utter = new SpeechSynthesisUtterance(text);
+  utter.lang = lang; utter.rate = rate; utter.pitch = 1.0; utter.volume = 1.0;
+  var v = _pickVoice(lang);
+  if (v) utter.voice = v;
+  var fired = false;
+  function finish() { if (fired) return; fired = true; done(); }
+  utter.onend = finish; utter.onerror = finish;
+  var delay = _speechFirstPending ? 60 : 0; // 首句延迟，规避 cancel 后立 speak 被吞
+  _speechFirstPending = false;
+  setTimeout(function () { try { window.speechSynthesis.speak(utter); } catch (e) { finish(); } }, delay);
+}
+var _cloudAudio = null;
+function _stopCloudAudio() {
+  if (_cloudAudio) { try { _cloudAudio.pause(); } catch (e) {} try { _cloudAudio.src = ''; } catch (e) {} _cloudAudio = null; }
+}
+function _escXml(s) {
+  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&apos;');
+}
+// 云端高质量语音（Azure 神经 TTS）：英文优先走云端，失败自动回退本地
+function _speakCloud(text, lang, rate, done) {
+  var region = (voiceSettings.cloudRegion || '').trim();
+  var key = (voiceSettings.cloudKey || '').trim();
+  var voice = voiceSettings.cloudVoice || 'en-US-AriaNeural';
+  if (!region || !key || typeof fetch === 'undefined') { _speakWeb(text, lang, rate, done); return; }
+  var vlang = voice.split('-').slice(0, 2).join('-');
+  var ssml = '<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" xml:lang="' + vlang + '">' +
+    '<voice name="' + voice + '"><prosody rate="' + Math.round(rate * 100) + '%">' + _escXml(text) + '</prosody></voice></speak>';
+  var endpoint = 'https://' + region + '.tts.speech.microsoft.com/cognitiveservices/v1';
+  fetch(endpoint, {
+    method: 'POST',
+    headers: { 'Ocp-Apim-Subscription-Key': key, 'Content-Type': 'application/ssml+xml', 'X-Microsoft-OutputFormat': 'audio-16khz-32kbitrate-mono-mp3' },
+    body: ssml
+  })
+    .then(function (r) { if (!r.ok) throw new Error('status ' + r.status); return r.blob(); })
+    .then(function (blob) {
+      var url = URL.createObjectURL(blob);
+      var a = new Audio(url); _cloudAudio = a;
+      a.onended = function () { try { URL.revokeObjectURL(url); } catch (e) {} _cloudAudio = null; done(); };
+      a.onerror = function () { try { URL.revokeObjectURL(url); } catch (e) {} _cloudAudio = null; _speakWeb(text, lang, rate, done); };
+      a.play().catch(function () { try { URL.revokeObjectURL(url); } catch (e) {} _cloudAudio = null; _speakWeb(text, lang, rate, done); });
+    })
+    .catch(function () { _speakWeb(text, lang, rate, done); });
+}
 function speak(text) {
-  if (!text || typeof window.speechSynthesis === 'undefined') return;
-  window.speechSynthesis.cancel();
+  if (!text) return;
+  var cloud = !!voiceSettings.cloudEnabled && !!voiceSettings.cloudRegion && !!voiceSettings.cloudKey;
+  if (typeof window.speechSynthesis === 'undefined' && !cloud) return;
+  if (typeof window.speechSynthesis !== 'undefined') window.speechSynthesis.cancel();
+  _stopCloudAudio();
+  _speechFirstPending = true;
   _splitByLang(text).forEach(function (run) {
     var lang = run.cjk ? 'zh-CN' : 'en-US';
-    var rate = run.cjk ? 0.9 : 0.8;  // 英文放慢，便于听写跟读
-    var utter = new SpeechSynthesisUtterance(run.text);
-    utter.lang = lang;
-    utter.rate = rate;
-    utter.pitch = 1.0;
-    utter.volume = 1.0;
-    var v = _pickVoice(lang);
-    if (v) utter.voice = v;
-    window.speechSynthesis.speak(utter);
+    var rate = run.cjk ? voiceSettings.rateZh : voiceSettings.rateEn;
+    var segs = run.cjk ? [run.text] : _segmentEnglish(run.text);
+    segs.forEach(function (seg) {
+      if (!run.cjk && cloud) _enqueueSpeech(function (done) { _speakCloud(seg, lang, rate, done); });
+      else _enqueueSpeech(function (done) { _speakWeb(seg, lang, rate, done); });
+    });
   });
+}
+
+// 语音设置 UI
+function populateVoiceSelectors() {
+  if (typeof window.speechSynthesis === 'undefined') return;
+  if (!_cachedVoices.length) _loadVoices();
+  var en = _cachedVoices.filter(function (v) { return (v.lang || '').toLowerCase().split('-')[0] === 'en'; });
+  var zh = _cachedVoices.filter(function (v) { return (v.lang || '').toLowerCase().split('-')[0] === 'zh'; });
+  var ve = document.getElementById('voice-en'), vz = document.getElementById('voice-zh');
+  if (ve) { ve.innerHTML = '<option value="">（自动优选）</option>' + en.map(function (v) { return '<option value="' + escapeHtml(v.name) + '">' + escapeHtml(v.name) + '</option>'; }).join(''); ve.value = voiceSettings.voiceEn; }
+  if (vz) { vz.innerHTML = '<option value="">（自动优选）</option>' + zh.map(function (v) { return '<option value="' + escapeHtml(v.name) + '">' + escapeHtml(v.name) + '</option>'; }).join(''); vz.value = voiceSettings.voiceZh; }
+}
+function initVoiceSettings() {
+  populateVoiceSelectors();
+  var re = document.getElementById('voice-rate-en'), rz = document.getElementById('voice-rate-zh');
+  if (re) { re.value = voiceSettings.rateEn; var rev = document.getElementById('rate-en-val'); if (rev) rev.textContent = Number(voiceSettings.rateEn).toFixed(2); }
+  if (rz) { rz.value = voiceSettings.rateZh; var rzv = document.getElementById('rate-zh-val'); if (rzv) rzv.textContent = Number(voiceSettings.rateZh).toFixed(2); }
+  var ve = document.getElementById('voice-en'); if (ve) ve.value = voiceSettings.voiceEn;
+  var vz = document.getElementById('voice-zh'); if (vz) vz.value = voiceSettings.voiceZh;
+  var ce = document.getElementById('cloud-enable'); if (ce) ce.checked = !!voiceSettings.cloudEnabled;
+  var cr = document.getElementById('cloud-region'); if (cr) cr.value = voiceSettings.cloudRegion || '';
+  var ck = document.getElementById('cloud-key'); if (ck) ck.value = voiceSettings.cloudKey || '';
+  var cv = document.getElementById('cloud-voice'); if (cv) cv.value = voiceSettings.cloudVoice || 'en-US-AriaNeural';
+  var cc = document.getElementById('cloud-config'); if (cc) cc.style.display = (ce && ce.checked) ? 'block' : 'none';
+}
+function onVoiceSettingChange() {
+  var re = document.getElementById('voice-rate-en'), rz = document.getElementById('voice-rate-zh');
+  if (re) { voiceSettings.rateEn = parseFloat(re.value) || 0.9; var rev = document.getElementById('rate-en-val'); if (rev) rev.textContent = Number(voiceSettings.rateEn).toFixed(2); }
+  if (rz) { voiceSettings.rateZh = parseFloat(rz.value) || 0.9; var rzv = document.getElementById('rate-zh-val'); if (rzv) rzv.textContent = Number(voiceSettings.rateZh).toFixed(2); }
+  var ve = document.getElementById('voice-en'); if (ve) voiceSettings.voiceEn = ve.value;
+  var vz = document.getElementById('voice-zh'); if (vz) voiceSettings.voiceZh = vz.value;
+  var ce = document.getElementById('cloud-enable'); if (ce) voiceSettings.cloudEnabled = ce.checked;
+  var cr = document.getElementById('cloud-region'); if (cr) voiceSettings.cloudRegion = cr.value.trim();
+  var ck = document.getElementById('cloud-key'); if (ck) voiceSettings.cloudKey = ck.value.trim();
+  var cv = document.getElementById('cloud-voice'); if (cv) voiceSettings.cloudVoice = cv.value;
+  var cc = document.getElementById('cloud-config'); if (cc) cc.style.display = (ce && ce.checked) ? 'block' : 'none';
+  saveVoiceSettings();
 }
 
 
@@ -2586,6 +2760,8 @@ document.querySelectorAll('.tab').forEach(function(tab) {
 
 renderWordList();
 updateCollectionList();
+loadVoiceSettings();
+initVoiceSettings();
 
 // ===== Change Collection =====
 function changeCollection(idx) {

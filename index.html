@@ -467,7 +467,7 @@ textarea{resize:vertical;min-height:80px}
 
 <script>// ===== Selection =====
 let selectedWordIndices = new Set();
-const APP_VERSION = '1.0.34';
+const APP_VERSION = '1.0.35';
 
 function onWordCheck(cb) {
   var idx = parseInt(cb.dataset.idx);
@@ -2005,8 +2005,8 @@ function speak(text) {
 
 // ===== 开源本地语音引擎（Kokoro / Piper）：纯前端、免费、自动降级 =====
 // 通过动态 import 加载 CDN 上的 ESM 模块；测试环境可注入 window.__importModule 覆盖
-var KOKORO_CDN = 'https://cdn.jsdelivr.net/npm/kokoro-js@1.2.1/+esm';
-var PIPER_CDN  = 'https://cdn.jsdelivr.net/npm/@realtimex/piper-tts-web@1.1.1/+esm';
+var KOKORO_CDN = '/vendor/kokoro/npm/kokoro-js@1.2.1/+esm';
+var PIPER_CDN  = '/vendor/piper/piper-tts-web.js';
 var ttsEngine = {
   kokoro: null, piper: null, piperSession: null,
   kokoroOk: null, piperOk: null,   // null=未试, true=可用, false=失败
@@ -2034,11 +2034,15 @@ async function _ensureKokoro() {
   var mod = await _importModule(KOKORO_CDN);
   var KokoroTTS = mod && mod.KokoroTTS ? mod.KokoroTTS : (mod && mod.default && mod.default.KokoroTTS);
   if (!KokoroTTS) throw new Error('KokoroTTS not found');
-  var device = _hasWebGPU() ? 'webgpu' : 'wasm';
-  var dtype = device === 'webgpu' ? 'fp32' : 'q8';
-  ttsEngine.kokoro = await KokoroTTS.from_pretrained('onnx-community/Kokoro-82M-v1.0-ONNX', {
+  try {
+    var tf = await _importModule('/vendor/kokoro/npm/@huggingface/transformers@3.5.1/+esm');
+    if (tf && tf.env) { tf.env.allowLocalModels = true; tf.env.localModelPath = '/'; }
+  } catch (e) {}
+  var device = 'wasm';   // 本地离线优先用 wasm，稳定可靠
+  var dtype = 'q8';
+  ttsEngine.kokoro = await KokoroTTS.from_pretrained('/models/kokoro', {
     dtype: dtype, device: device,
-    progress_callback: function (p) { if (p && p.status === 'progress') _setEngineStatus('Kokoro 下载中 ' + Math.round((p.progress || 0) * 100) + '%'); }
+    progress_callback: function (p) { if (p && p.status === 'progress') _setEngineStatus('Kokoro 加载中 ' + Math.round((p.progress || 0) * 100) + '%'); }
   });
   ttsEngine.kokoroOk = true;
   _setEngineStatus('Kokoro 就绪');
@@ -2119,11 +2123,11 @@ async function _speakOpen(text, rate, done) {
 function preloadOpenEngine() {
   var eng = _resolveEngine();
   if (eng === 'kokoro') {
-    _setEngineStatus('开始下载 Kokoro…');
+    _setEngineStatus('开始加载 Kokoro…');
     _ensureKokoro().then(function () { _setEngineStatus('Kokoro 就绪'); })
       .catch(function (e) { ttsEngine.kokoroOk = false; _setEngineStatus('Kokoro 加载失败：' + (e && e.message)); });
   } else if (eng === 'piper') {
-    _setEngineStatus('开始下载 Piper…');
+    _setEngineStatus('开始加载 Piper…');
     _ensurePiper().then(function () { _setEngineStatus('Piper 就绪'); })
       .catch(function (e) { ttsEngine.piperOk = false; _setEngineStatus('Piper 加载失败：' + (e && e.message)); });
   } else {
@@ -2904,6 +2908,20 @@ renderWordList();
 updateCollectionList();
 loadVoiceSettings();
 initVoiceSettings();
+checkServeMode();
+
+// 本地语音模型需经 HTTP 加载：file:// 下 fetch 本地模型会被浏览器拦截
+function checkServeMode() {
+  try {
+    if (location.protocol === 'file:') {
+      var warn = document.createElement('div');
+      warn.id = 'serve-warn';
+      warn.style.cssText = 'position:fixed;left:0;right:0;top:0;z-index:9999;background:#b45309;color:#fff;font-size:13px;line-height:1.5;padding:10px 14px;text-align:center';
+      warn.innerHTML = '⚠️ 检测到以 file:// 方式打开：本地语音模型无法加载。请改用本地服务器访问（在本文件夹运行 <b>serve.bat</b> 或 <b>python -m http.server 8000</b>，再打开 <b>http://localhost:8000</b>）。';
+      document.body.insertBefore(warn, document.body.firstChild);
+    }
+  } catch (e) {}
+}
 
 // ===== Change Collection =====
 function changeCollection(idx) {

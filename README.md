@@ -2,7 +2,7 @@
 
 一个面向中小学学生的**语文 + 英语默写练习工具**。纯前端单文件网页应用，打开即用，支持汉字词语、英语单词、英语句子与课文默写，内置语音朗读、手写板、自动批改、错题订正与抄写练习。
 
-> 当前版本：`1.0.34` ｜ 许可证：ISC ｜ 形态：单文件网页应用（PWA，可打包 Android）
+> 当前版本：`1.0.35` ｜ 许可证：ISC ｜ 形态：单文件网页应用（PWA，可打包 Android）
 
 ## ✨ 功能特性
 
@@ -103,6 +103,17 @@ dictation-assistant/
 - 单人维护，仓库尚在持续打磨中。
 
 ## 📌 更新日志 (Changelog)
+
+### v1.0.35（2026-10-08）
+
+- **语音模型改为本地离线加载**：Kokoro 与 Piper 两个开源 TTS 的运行时与模型权重已下载打包到项目 `vendor/`（运行时）与 `models/`（模型）目录，朗读时改走本地相对路径，不再依赖被墙的 `huggingface.co` / `cdn.jsdelivr.net`，国内真机不再出现「模型下载失败」。
+  - `vendor/piper/`：piper-tts-web 运行时 + piper-wasm + onnxruntime-web（wasm 内联 bundle）+ 英文语音 `en_US-lessac-medium`。
+  - `vendor/kokoro/`：kokoro-js + @huggingface/transformers + phonemizer + onnxruntime-common 的 ESM 依赖树（onnxruntime 复用 Piper 的 bundle）。
+  - `models/kokoro/`：Kokoro-82M 权重（config/tokenizer/`onnx/model_quantized.onnx`/`voices/af_heart.bin`）。
+  - `models/piper/`：Piper 英文语音模型。
+  - 体积约 250–300MB，**不进 GitHub**（`vendor/`、`models/`、`output/` 已加入 `.gitignore`）。
+- **必须用本地服务器打开**：浏览器禁止 `file://` 下 `fetch` 本地模型文件。项目根目录提供 `serve.py` / `serve.bat`，运行后访问 `http://localhost:8000` 即可；以 `file://` 打开时页面顶部会提示。`file://` 下语音模型无法加载，会自动回退系统语音。
+- 加载状态文案由「下载」改为「加载」。
 
 ### v1.0.34（2026-10-08）
 - **双引擎开源免费语音（彻底解决英文句子听不清）。** 集成两个完全开源、无需密钥的浏览器端 TTS 模型，替代系统破音语音：

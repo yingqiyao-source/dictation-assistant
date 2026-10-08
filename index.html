@@ -252,6 +252,17 @@ textarea{resize:vertical;min-height:80px}
         <label style="font-size:13px;color:var(--text2)" >中文语音</label>
         <select id="voice-zh" style="margin-top:4px;width:100%" onchange="onVoiceSettingChange()" ></select>
       </div>
+      <div style="margin-bottom:14px" >
+        <label style="font-size:13px;color:var(--text2)" >英文语音引擎（开源免费，无需密钥）</label>
+        <select id="voice-engine" style="margin-top:4px;width:100%" onchange="onVoiceSettingChange()" >
+          <option value="auto">自动（有 WebGPU 用 Kokoro，否则 Piper）</option>
+          <option value="kokoro">Kokoro（质量最高·需 WebGPU/桌面浏览器）</option>
+          <option value="piper">Piper（兼容性好·手机/平板可跑）</option>
+          <option value="system">系统/云端（沿用原有，不下载模型）</option>
+        </select>
+        <div id="engine-status" style="font-size:12px;color:#888;margin-top:4px" >未加载，首次朗读英文时自动下载</div>
+        <button class="btn btn-outline btn-sm" style="margin-top:8px" onclick="preloadOpenEngine()" >立即下载语音模型（约 60–80MB，之后可离线）</button>
+      </div>
       <div style="margin-bottom:8px" >
         <label style="font-size:13px;color:var(--text2);display:flex;align-items:center;gap:8px;cursor:pointer" >
           <input type="checkbox" id="cloud-enable" onchange="onVoiceSettingChange()" > 使用云端高质量语音（英文，需微软 Azure 密钥）
@@ -456,7 +467,7 @@ textarea{resize:vertical;min-height:80px}
 
 <script>// ===== Selection =====
 let selectedWordIndices = new Set();
-const APP_VERSION = '1.0.33';
+const APP_VERSION = '1.0.34';
 
 function onWordCheck(cb) {
   var idx = parseInt(cb.dataset.idx);
@@ -1838,7 +1849,7 @@ function playCurrentAudio() {
 
 // ---- 语音朗读：缓存 voices 并强力优先高质量（神经/在线）语音，解决英文发音生硬 ----
 var _cachedVoices = [];
-var voiceSettings = { rateEn: 0.9, rateZh: 0.9, voiceEn: '', voiceZh: '', cloudEnabled: false, cloudRegion: '', cloudKey: '', cloudVoice: 'en-US-AriaNeural' };
+var voiceSettings = { rateEn: 0.9, rateZh: 0.9, voiceEn: '', voiceZh: '', engine: 'auto', cloudEnabled: false, cloudRegion: '', cloudKey: '', cloudVoice: 'en-US-AriaNeural' };
 function loadVoiceSettings() {
   try {
     var s = JSON.parse(localStorage.getItem('dictation_voice_settings') || '{}');
@@ -1981,14 +1992,143 @@ function speak(text) {
   _stopCloudAudio();
   _speechFirstPending = true;
   _splitByLang(text).forEach(function (run) {
-    var lang = run.cjk ? 'zh-CN' : 'en-US';
     var rate = run.cjk ? voiceSettings.rateZh : voiceSettings.rateEn;
     var segs = run.cjk ? [run.text] : _segmentEnglish(run.text);
     segs.forEach(function (seg) {
-      if (!run.cjk && cloud) _enqueueSpeech(function (done) { _speakCloud(seg, lang, rate, done); });
-      else _enqueueSpeech(function (done) { _speakWeb(seg, lang, rate, done); });
+      if (run.cjk) { _enqueueSpeech(function (done) { _speakWeb(seg, 'zh-CN', rate, done); }); return; }
+      if (cloud) { _enqueueSpeech(function (done) { _speakCloud(seg, 'en-US', rate, done); }); return; }
+      if (_openEngineWanted()) { _enqueueSpeech(function (done) { _speakOpen(seg, rate, done); }); return; }
+      _enqueueSpeech(function (done) { _speakWeb(seg, 'en-US', rate, done); });
     });
   });
+}
+
+// ===== 开源本地语音引擎（Kokoro / Piper）：纯前端、免费、自动降级 =====
+// 通过动态 import 加载 CDN 上的 ESM 模块；测试环境可注入 window.__importModule 覆盖
+var KOKORO_CDN = 'https://cdn.jsdelivr.net/npm/kokoro-js@1.2.1/+esm';
+var PIPER_CDN  = 'https://cdn.jsdelivr.net/npm/@realtimex/piper-tts-web@1.1.1/+esm';
+var ttsEngine = {
+  kokoro: null, piper: null, piperSession: null,
+  kokoroOk: null, piperOk: null,   // null=未试, true=可用, false=失败
+  kokoroVoice: 'af_heart', piperVoice: 'en_US-lessac-medium'
+};
+function _setEngineStatus(msg) { var el = document.getElementById('engine-status'); if (el) el.textContent = msg; }
+function _importModule(url) {
+  if (typeof window.__importModule === 'function') return window.__importModule(url);
+  try { return (0, eval)('import(' + JSON.stringify(url) + ')'); }
+  catch (e) { return Promise.reject(e); }
+}
+function _hasWebGPU() {
+  try { return !!(typeof navigator !== 'undefined' && navigator.gpu && navigator.gpu.requestAdapter); } catch (e) { return false; }
+}
+function _resolveEngine() {
+  var m = (voiceSettings.engine || 'auto');
+  if (m === 'kokoro' || m === 'piper' || m === 'system') return m;
+  return _hasWebGPU() ? 'kokoro' : 'piper';   // auto：有 WebGPU 用 Kokoro，否则 Piper
+}
+function _openEngineWanted() { return (voiceSettings.engine || 'auto') !== 'system'; }
+async function _ensureKokoro() {
+  if (ttsEngine.kokoroOk === false) throw new Error('kokoro disabled');
+  if (ttsEngine.kokoro) return ttsEngine.kokoro;
+  _setEngineStatus('正在加载 Kokoro 模型…');
+  var mod = await _importModule(KOKORO_CDN);
+  var KokoroTTS = mod && mod.KokoroTTS ? mod.KokoroTTS : (mod && mod.default && mod.default.KokoroTTS);
+  if (!KokoroTTS) throw new Error('KokoroTTS not found');
+  var device = _hasWebGPU() ? 'webgpu' : 'wasm';
+  var dtype = device === 'webgpu' ? 'fp32' : 'q8';
+  ttsEngine.kokoro = await KokoroTTS.from_pretrained('onnx-community/Kokoro-82M-v1.0-ONNX', {
+    dtype: dtype, device: device,
+    progress_callback: function (p) { if (p && p.status === 'progress') _setEngineStatus('Kokoro 下载中 ' + Math.round((p.progress || 0) * 100) + '%'); }
+  });
+  ttsEngine.kokoroOk = true;
+  _setEngineStatus('Kokoro 就绪');
+  return ttsEngine.kokoro;
+}
+async function _ensurePiper() {
+  if (ttsEngine.piperOk === false) throw new Error('piper disabled');
+  if (ttsEngine.piperSession) return ttsEngine.piperSession;
+  _setEngineStatus('正在加载 Piper 模型…');
+  var mod = await _importModule(PIPER_CDN);
+  ttsEngine.piper = mod;
+  var SessionCls = (mod && mod.TtsSession) ? mod.TtsSession : null;
+  var sess;
+  if (SessionCls && SessionCls.create) {
+    sess = await SessionCls.create({ voiceId: ttsEngine.piperVoice, fallbackStrategy: 'auto',
+      progress: function (p) { if (p && p.total) _setEngineStatus('Piper 下载中 ' + Math.round(p.loaded / p.total * 100) + '%'); } });
+  } else {
+    sess = await mod.TtsSession({ voiceId: ttsEngine.piperVoice, fallbackStrategy: 'auto' });
+  }
+  ttsEngine.piperSession = sess;
+  ttsEngine.piperOk = true;
+  _setEngineStatus('Piper 就绪');
+  return sess;
+}
+var _localAudio = null;
+function _stopLocalAudio() {
+  if (_localAudio) {
+    try { if (_localAudio.stop) _localAudio.stop(); else if (_localAudio.pause) _localAudio.pause(); } catch (e) {}
+    _localAudio = null;
+  }
+}
+function _playFloat32(float32, sr, done) {
+  var AC = window.AudioContext || window.webkitAudioContext;
+  if (!AC || !float32) { done(); return; }
+  try {
+    var ctx = new AC();
+    var buf = ctx.createBuffer(1, float32.length, sr || 24000);
+    buf.copyToChannel(float32, 0);
+    var src = ctx.createBufferSource();
+    src.buffer = buf;
+    src.onended = function () { try { ctx.close(); } catch (e) {} done(); };
+    src.connect(ctx.destination);
+    _localAudio = { stop: function () { try { src.stop(); } catch (e) {} try { ctx.close(); } catch (e) {} } };
+    src.start();
+  } catch (e) { done(); }
+}
+function _playBlob(blob, done) {
+  if (!blob || typeof URL === 'undefined' || !URL.createObjectURL) { done(); return; }
+  try {
+    var url = URL.createObjectURL(blob);
+    var a = new Audio(url); _localAudio = a;
+    a.onended = function () { try { URL.revokeObjectURL(url); } catch (e) {} _localAudio = null; done(); };
+    a.onerror = function () { try { URL.revokeObjectURL(url); } catch (e) {} _localAudio = null; done(); };
+    a.play().catch(function () { try { URL.revokeObjectURL(url); } catch (e) {} _localAudio = null; done(); });
+  } catch (e) { done(); }
+}
+async function _speakOpen(text, rate, done) {
+  var eng = _resolveEngine();
+  try {
+    if (eng === 'kokoro') {
+      var tts = await _ensureKokoro();
+      var audio = await tts.generate(text, { voice: ttsEngine.kokoroVoice, speed: rate });
+      _playFloat32(audio && audio.audio ? audio.audio : null, audio && audio.sampling_rate ? audio.sampling_rate : 24000, done);
+      return;
+    }
+    if (eng === 'piper') {
+      var sess = await _ensurePiper();
+      var wav = await sess.predict(text);
+      _playBlob(wav, done);
+      return;
+    }
+  } catch (e) {
+    console.warn('开源语音失败，回退系统语音', e);
+    _setEngineStatus('开源语音不可用，已回退系统语音');
+  }
+  _speakWeb(text, 'en-US', rate, done);
+}
+function preloadOpenEngine() {
+  var eng = _resolveEngine();
+  if (eng === 'kokoro') {
+    _setEngineStatus('开始下载 Kokoro…');
+    _ensureKokoro().then(function () { _setEngineStatus('Kokoro 就绪'); })
+      .catch(function (e) { ttsEngine.kokoroOk = false; _setEngineStatus('Kokoro 加载失败：' + (e && e.message)); });
+  } else if (eng === 'piper') {
+    _setEngineStatus('开始下载 Piper…');
+    _ensurePiper().then(function () { _setEngineStatus('Piper 就绪'); })
+      .catch(function (e) { ttsEngine.piperOk = false; _setEngineStatus('Piper 加载失败：' + (e && e.message)); });
+  } else {
+    _setEngineStatus('当前为系统/云端引擎，无需下载模型');
+  }
 }
 
 // 语音设置 UI
@@ -2012,6 +2152,7 @@ function initVoiceSettings() {
   var cr = document.getElementById('cloud-region'); if (cr) cr.value = voiceSettings.cloudRegion || '';
   var ck = document.getElementById('cloud-key'); if (ck) ck.value = voiceSettings.cloudKey || '';
   var cv = document.getElementById('cloud-voice'); if (cv) cv.value = voiceSettings.cloudVoice || 'en-US-AriaNeural';
+  var eng = document.getElementById('voice-engine'); if (eng) eng.value = voiceSettings.engine || 'auto';
   var cc = document.getElementById('cloud-config'); if (cc) cc.style.display = (ce && ce.checked) ? 'block' : 'none';
 }
 function onVoiceSettingChange() {
@@ -2024,6 +2165,7 @@ function onVoiceSettingChange() {
   var cr = document.getElementById('cloud-region'); if (cr) voiceSettings.cloudRegion = cr.value.trim();
   var ck = document.getElementById('cloud-key'); if (ck) voiceSettings.cloudKey = ck.value.trim();
   var cv = document.getElementById('cloud-voice'); if (cv) voiceSettings.cloudVoice = cv.value;
+  var eng = document.getElementById('voice-engine'); if (eng) voiceSettings.engine = eng.value;
   var cc = document.getElementById('cloud-config'); if (cc) cc.style.display = (ce && ce.checked) ? 'block' : 'none';
   saveVoiceSettings();
 }

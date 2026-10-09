@@ -1,19 +1,20 @@
 @echo off
-setlocal enabledelayedexpansion
+setlocal
 set "DIR=%~dp0"
 if not exist "%DIR%serve.py" (
-  echo [错误] 未找到同目录下的 serve.py，请确认本文件与 serve.py 放在一起。
+  echo [ERROR] serve.py not found in the same folder as this script.
+  echo Please keep serve.py together with serve.bat.
   pause
   exit /b 1
 )
 where python >nul 2>nul
 if errorlevel 1 (
-  echo [错误] 未找到 python，请先安装 Python 3.8+ 并加入系统 PATH。
+  echo [ERROR] python not found. Install Python 3.8+ and add it to PATH.
   pause
   exit /b 1
 )
-echo 正在启动本地服务器...
-echo 请在浏览器打开： http://localhost:8000
-echo （按 Ctrl+C 停止；直接关闭此窗口也会停止服务器）
+echo Starting local server...
+echo Open this URL in your browser: http://localhost:8000
+echo Press Ctrl+C to stop. Closing this window also stops the server.
 python "%DIR%serve.py"
 pause

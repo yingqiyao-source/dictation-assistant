@@ -26,6 +26,11 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
     def end_headers(self):
         self.send_header('Access-Control-Allow-Origin', '*')
+        # 多线程 wasm（ort-wasm-simd-threaded.jsep）需要跨源隔离策略才能用 SharedArrayBuffer；
+        # 同时给所有响应加 CORP，使同源 ES 模块 / worker 在 COEP=require-corp 下不被拦截
+        self.send_header('Cross-Origin-Opener-Policy', 'same-origin')
+        self.send_header('Cross-Origin-Embedder-Policy', 'require-corp')
+        self.send_header('Cross-Origin-Resource-Policy', 'cross-origin')
         super().end_headers()
 
 

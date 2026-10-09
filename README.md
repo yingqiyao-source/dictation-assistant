@@ -2,7 +2,7 @@
 
 一个面向中小学学生的**语文 + 英语默写练习工具**。纯前端单文件网页应用，打开即用，支持汉字词语、英语单词、英语句子与课文默写，内置语音朗读、手写板、自动批改、错题订正与抄写练习。
 
-> 当前版本：`1.0.36` ｜ 许可证：ISC ｜ 形态：单文件网页应用（PWA，可打包 Android）
+> 当前版本：`1.0.37` ｜ 许可证：ISC ｜ 形态：单文件网页应用（PWA，可打包 Android）
 
 ## ✨ 功能特性
 
@@ -103,6 +103,13 @@ dictation-assistant/
 - 单人维护，仓库尚在持续打磨中。
 
 ## 📌 更新日志 (Changelog)
+
+### v1.0.37（2026-10-09）
+- **离线语音加载失败的根因修复（Kokoro 必败的 MIME 问题 + 预览服务器误用）。** 真机反馈「kokoro/piper 加载失败」。排查确认两点：
+  - ① 平台预览/IDE 内嵌服务器（如 `http://127.0.0.1:63786`）不会暴露 `/vendor` 模型目录，导致 `/vendor/piper/piper-tts-web.js` 取不到 → `Failed to fetch dynamically imported module`。**离线模型只能通过本项目的本地服务器访问**。
+  - ② `serve.py` 把 jsdelivr 的 ESM 文件（`xxx/+esm`，无扩展名）按 `application/octet-stream` 返回，浏览器拒绝当作模块加载 → Kokoro 链之前必败。已重写 `serve.py`：对 `+esm`/`.mjs`/`.js` 强制 `text/javascript`，并补 `.data` 映射。实测 `+esm`→`text/javascript`、`.wasm`→`application/wasm`、`.onnx`→`application/octet-stream` 均正确。
+- **离线语音诊断增强**：新增 `_probeModule()` 探测模块是否可加载（检查 HTTP 状态与 `Content-Type`）；`checkOfflineVendor()` 在启动时探测 `/vendor`，不可达直接在「引擎状态」给出明确指引（「请用 serve.bat 从本文件夹启动本地服务器」）；Kokoro/Piper 加载失败时状态栏显示原始错误 + MIME/404 原因，并回退系统语音。验证：jsdom 6 断言全 PASS（vendor 不可达→明确警告、kokoro 失败→记录原因）；`serve.py` 各类型 MIME 经 `curl -I` 实测确认。
+- **使用方式（重要）**：必须用本项目 `serve.bat`（或 `python serve.py`）从 `D:\dictation-assistant` 目录启动，浏览器打开 `http://localhost:8000`；不要用平台预览/双击 `file://` 打开，否则离线模型不可用（会回退系统/云端语音，日常默写不受影响）。
 
 ### v1.0.36（2026-10-08）
 - **file:// 打开体验改进（离线语音模型提示不再阻断使用）。** 浏览器安全策略禁止 `file://` 页面 `fetch` 本地模型，Kokoro/Piper 离线引擎在 `file://` 下本就无法加载；本次让 `file://` 模式自动回退系统/云端语音（中英文照常朗读，不再硬加载离线模型报错），并灰掉语音设置里的离线引擎选项（仅内存态、不持久化，用本地服务器打开仍是离线引擎）。顶部提示条改为明确「系统/云端语音仍可正常朗读」，并新增「复制启动命令」按钮（一键复制 `python -m http.server 8000`）+「知道了」关闭按钮。验证：jsdom 17 断言全 PASS（`file://` 下引擎强制 system、离线选项禁用、提示条含复制/关闭按钮；`http://` 下行为无回归）。

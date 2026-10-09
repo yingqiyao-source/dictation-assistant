@@ -467,7 +467,7 @@ textarea{resize:vertical;min-height:80px}
 
 <script>// ===== Selection =====
 let selectedWordIndices = new Set();
-const APP_VERSION = '1.0.36';
+const APP_VERSION = '1.0.37';
 
 function onWordCheck(cb) {
   var idx = parseInt(cb.dataset.idx);
@@ -2021,6 +2021,25 @@ function _importModule(url) {
   try { return (0, eval)('import(' + JSON.stringify(url) + ')'); }
   catch (e) { return Promise.reject(e); }
 }
+// 探测某个离线模块是否可被浏览器正常加载：返回 null=正常，否则返回中文原因
+function _probeModule(url) {
+  if (typeof fetch !== 'function') return Promise.resolve(null);
+  try {
+    return fetch(url, { method: 'GET', cache: 'no-store' }).then(function (r) {
+      var ct = (r.headers.get('content-type') || '').toLowerCase();
+      if (!r.ok) return 'HTTP ' + r.status + '（离线模型文件未找到——请确认是用本地服务器从本文件夹启动的）';
+      if (!/(javascript|ecmascript)/.test(ct)) return '服务器返回的 Content-Type 为「' + ct + '』，浏览器拒绝作为模块加载（请用 serve.bat 启动本地服务器）';
+      return null;
+    }).catch(function (e) { return '无法请求离线模型文件：' + e.message + '（请改用本地服务器打开）'; });
+  } catch (e) { return Promise.resolve('无法请求离线模型文件：' + e.message); }
+}
+// 启动后检查离线模型目录是否可达；不可达则给出明确指引（避免只看懂一句报错）
+function checkOfflineVendor() {
+  if (_fileMode || !_openEngineWanted()) return;
+  _probeModule('/vendor/piper/piper-tts-web.js').then(function (d) {
+    if (d) _setEngineStatus('⚠️ 离线语音模型未就绪：' + d + '（已自动使用系统/云端语音）');
+  });
+}
 function _hasWebGPU() {
   try { return !!(typeof navigator !== 'undefined' && navigator.gpu && navigator.gpu.requestAdapter); } catch (e) { return false; }
 }
@@ -2032,7 +2051,7 @@ function _resolveEngine() {
 }
 function _openEngineWanted() { return !_fileMode && (voiceSettings.engine || 'auto') !== 'system'; }
 async function _ensureKokoro() {
-  if (ttsEngine.kokoroOk === false) throw new Error('kokoro disabled');
+  if (ttsEngine.kokoroOk === false) return Promise.reject(new Error(ttsEngine.kokoroErr || 'kokoro disabled'));
   if (ttsEngine.kokoro) return ttsEngine.kokoro;
   _setEngineStatus('正在加载 Kokoro 模型…');
   var mod = await _importModule(KOKORO_CDN);
@@ -2053,7 +2072,7 @@ async function _ensureKokoro() {
   return ttsEngine.kokoro;
 }
 async function _ensurePiper() {
-  if (ttsEngine.piperOk === false) throw new Error('piper disabled');
+  if (ttsEngine.piperOk === false) return Promise.reject(new Error(ttsEngine.piperErr || 'piper disabled'));
   if (ttsEngine.piperSession) return ttsEngine.piperSession;
   _setEngineStatus('正在加载 Piper 模型…');
   var mod = await _importModule(PIPER_CDN);
@@ -2120,7 +2139,7 @@ async function _speakOpen(text, rate, done) {
     }
   } catch (e) {
     console.warn('开源语音失败，回退系统语音', e);
-    _setEngineStatus('开源语音不可用，已回退系统语音');
+    _setEngineStatus('开源语音失败(已回退系统)：' + (e && e.message ? e.message : String(e)));
   }
   _speakWeb(text, 'en-US', rate, done);
 }
@@ -2130,11 +2149,13 @@ function preloadOpenEngine() {
   if (eng === 'kokoro') {
     _setEngineStatus('开始加载 Kokoro…');
     _ensureKokoro().then(function () { _setEngineStatus('Kokoro 就绪'); })
-      .catch(function (e) { ttsEngine.kokoroOk = false; _setEngineStatus('Kokoro 加载失败：' + (e && e.message)); });
+      .catch(function (e) { ttsEngine.kokoroOk = false; ttsEngine.kokoroErr = (e && e.message) || 'unknown';
+        _probeModule(KOKORO_CDN).then(function (d) { _setEngineStatus('Kokoro 加载失败：' + ttsEngine.kokoroErr + (d ? ' ｜ ' + d : '') + '（已回退系统语音）'); }); });
   } else if (eng === 'piper') {
     _setEngineStatus('开始加载 Piper…');
     _ensurePiper().then(function () { _setEngineStatus('Piper 就绪'); })
-      .catch(function (e) { ttsEngine.piperOk = false; _setEngineStatus('Piper 加载失败：' + (e && e.message)); });
+      .catch(function (e) { ttsEngine.piperOk = false; ttsEngine.piperErr = (e && e.message) || 'unknown';
+        _probeModule(PIPER_CDN).then(function (d) { _setEngineStatus('Piper 加载失败：' + ttsEngine.piperErr + (d ? ' ｜ ' + d : '') + '（已回退系统语音）'); }); });
   } else {
     _setEngineStatus('当前为系统/云端引擎，无需下载模型');
   }
@@ -2172,6 +2193,7 @@ function initVoiceSettings() {
     }
   }
   var cc = document.getElementById('cloud-config'); if (cc) cc.style.display = (ce && ce.checked) ? 'block' : 'none';
+  if (_openEngineWanted()) checkOfflineVendor();
 }
 function onVoiceSettingChange() {
   var re = document.getElementById('voice-rate-en'), rz = document.getElementById('voice-rate-zh');

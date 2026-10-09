@@ -1,6 +1,17 @@
 <!DOCTYPE html>
 <html lang="zh-CN" >
 <head>
+<!-- 离线语音：把裸标识符 onnxruntime-web / onnxruntime-node / onnxruntime-common 解析到本地已下载的 ort bundle
+     （与 Piper 共用），避免把巨型 wasm 运行时打进 Kokoro bundle。必须放在任何模块脚本之前。 -->
+<script type="importmap">
+{
+  "imports": {
+    "onnxruntime-web": "/vendor/piper/onnxruntime-web/ort.all.bundle.min.mjs",
+    "onnxruntime-node": "/vendor/piper/onnxruntime-web/ort.all.bundle.min.mjs",
+    "onnxruntime-common": "/vendor/piper/onnxruntime-web/ort.all.bundle.min.mjs"
+  }
+}
+</script>
 <meta charset="UTF-8" >
 <meta name="viewport" content="width=device-width,initial-scale=1.0,user-scalable=no" >
 <meta name="apple-mobile-web-app-capable" content="yes" >
@@ -467,7 +478,7 @@ textarea{resize:vertical;min-height:80px}
 
 <script>// ===== Selection =====
 let selectedWordIndices = new Set();
-const APP_VERSION = '1.0.37';
+const APP_VERSION = '1.0.38';
 
 function onWordCheck(cb) {
   var idx = parseInt(cb.dataset.idx);
@@ -2008,7 +2019,7 @@ function speak(text) {
 // file:// 模式下浏览器禁止 fetch 本地模型，_fileMode 为真时强制回退系统语音（不持久化，避免改掉用户偏好）
 var _fileMode = false;
 if (typeof location !== 'undefined' && location.protocol === 'file:') _fileMode = true;
-var KOKORO_CDN = '/vendor/kokoro/npm/kokoro-js@1.2.1/+esm';
+var KOKORO_CDN = '/vendor/kokoro/dist/kokoro.bundle.js';
 var PIPER_CDN  = '/vendor/piper/piper-tts-web.js';
 var ttsEngine = {
   kokoro: null, piper: null, piperSession: null,
@@ -2057,9 +2068,14 @@ async function _ensureKokoro() {
   var mod = await _importModule(KOKORO_CDN);
   var KokoroTTS = mod && mod.KokoroTTS ? mod.KokoroTTS : (mod && mod.default && mod.default.KokoroTTS);
   if (!KokoroTTS) throw new Error('KokoroTTS not found');
+  // 配置 transformers 本地模型加载：bundle 已内联 transformers，其 env 随包导出（mod.env）。
+  // 禁止回退 HuggingFace Hub（被墙），改为从本地 HTTP 路径 /models/kokoro 直接 fetch。
   try {
-    var tf = await _importModule('/vendor/kokoro/npm/@huggingface/transformers@3.5.1/+esm');
-    if (tf && tf.env) { tf.env.allowLocalModels = true; tf.env.localModelPath = '/'; }
+    if (mod.env) {
+      mod.env.allowRemoteModels = false;
+      mod.env.allowLocalModels = true;
+      mod.env.localModelPath = '/';
+    }
   } catch (e) {}
   var device = 'wasm';   // 本地离线优先用 wasm，稳定可靠
   var dtype = 'q8';

@@ -2,7 +2,7 @@
 
 一个面向中小学学生的**语文 + 英语默写练习工具**。纯前端单文件网页应用，打开即用，支持汉字词语、英语单词、英语句子与课文默写，内置语音朗读、手写板、自动批改、错题订正与抄写练习。
 
-> 当前版本：`1.0.37` ｜ 许可证：ISC ｜ 形态：单文件网页应用（PWA，可打包 Android）
+> 当前版本：`1.0.38` ｜ 许可证：ISC ｜ 形态：单文件网页应用（PWA，可打包 Android）
 
 ## ✨ 功能特性
 
@@ -103,6 +103,11 @@ dictation-assistant/
 - 单人维护，仓库尚在持续打磨中。
 
 ## 📌 更新日志 (Changelog)
+
+### v1.0.38（2026-10-09）
+- **Kokoro 离线加载彻底修好（用 esbuild 打真正自包含的单文件 bundle）。** 真机仍报 Kokoro `Failed to fetch dynamically imported module`。根因：jsDelivr 的 `@huggingface/transformers@3.5.1/+esm` 并非单文件，而是带几百个指向 `src/` 源码树的相对懒加载 re-export 的门面；手写改写路径只会越改越乱（曾出现嵌套三层的 `/vendor/kokoro/vendor/kokoro/...` 坏路径），且 transformers 源码用模板字面量动态 `import()` 分块，根本无法静态托管。改用 esbuild 在本地把 `kokoro-js` 连同 `transformers` **源码**（`src/transformers.js`）整体打包：开启 `splitting`、`alias` 强制指向源码入口、`onnxruntime-web/onnxruntime-common/onnxruntime-node` 标记 external，产出 `vendor/kokoro/dist/kokoro.bundle.js`（3.6MB，自包含）。剥离注释后实测：真实 `import()` 调用 0、相对路径 404 风险 0，external 是裸 `onnxruntime-web`/`onnxruntime-node`/`onnxruntime-common`（均经 import map 解析到 Piper 共用的 `ort.all.bundle.min.mjs`；已确认该 bundle 导出 `Tensor`，可满足 `import { Tensor } from "onnxruntime-common"`）。
+- **index.html 配套改造**：`<head>` 新增 import map（把 `onnxruntime-web`/`onnxruntime-node`/`onnxruntime-common` 全部映射到本地 ort bundle）；`KOKORO_CDN` 指向 `vendor/kokoro/dist/kokoro.bundle.js`；`_ensureKokoro` 删除旧的坏 `transformers@3.5.1/+esm` 导入，改用 `mod.env` 配置 `allowRemoteModels=false / allowLocalModels=true / localModelPath='/'` 强制本地 `/models/kokoro` 加载（不回退被墙的 HuggingFace Hub）。
+- **说明**：`vendor/` 被 `.gitignore` 忽略，新 bundle 仅落在 `D:\dictation-assistant\vendor\kokoro\dist\`（沙箱即真机目录），刷新即用、无需发版外额外操作。旧的 `vendor/kokoro/npm/` 门面文件已弃用。验证：`node --check` 语法通过、import map JSON 合法、bundle 内部依赖图经脚本确认无 404。真机 wasm 推理结果需你刷新确认。
 
 ### v1.0.37（2026-10-09）
 - **离线语音加载失败的根因修复（Kokoro 必败的 MIME 问题 + 预览服务器误用）。** 真机反馈「kokoro/piper 加载失败」。排查确认两点：

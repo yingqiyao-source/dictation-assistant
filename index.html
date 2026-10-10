@@ -6,9 +6,9 @@
 <script type="importmap">
 {
   "imports": {
-    "onnxruntime-web": "/vendor/piper/onnxruntime-web/ort.all.bundle.min.mjs",
-    "onnxruntime-node": "/vendor/piper/onnxruntime-web/ort.all.bundle.min.mjs",
-    "onnxruntime-common": "/vendor/piper/onnxruntime-web/ort.all.bundle.min.mjs"
+    "onnxruntime-web": "./vendor/piper/onnxruntime-web/ort.all.bundle.min.mjs",
+    "onnxruntime-node": "./vendor/piper/onnxruntime-web/ort.all.bundle.min.mjs",
+    "onnxruntime-common": "./vendor/piper/onnxruntime-web/ort.all.bundle.min.mjs"
   }
 }
 </script>
@@ -478,7 +478,7 @@ textarea{resize:vertical;min-height:80px}
 
 <script>// ===== Selection =====
 let selectedWordIndices = new Set();
-const APP_VERSION = '1.0.38';
+const APP_VERSION = '1.0.39';
 
 function onWordCheck(cb) {
   var idx = parseInt(cb.dataset.idx);
@@ -2019,8 +2019,16 @@ function speak(text) {
 // file:// 模式下浏览器禁止 fetch 本地模型，_fileMode 为真时强制回退系统语音（不持久化，避免改掉用户偏好）
 var _fileMode = false;
 if (typeof location !== 'undefined' && location.protocol === 'file:') _fileMode = true;
-var KOKORO_CDN = '/vendor/kokoro/dist/kokoro.bundle.js';
-var PIPER_CDN  = '/vendor/piper/piper-tts-web.js';
+function _baseDir() {
+  var b = (typeof document !== 'undefined' && (document.baseURI || location.href)) || '';
+  if (b.slice(-1) === '/') return b;
+  var seg = b.slice(b.lastIndexOf('/') + 1);
+  if (seg.indexOf('.') >= 0) b = b.slice(0, b.lastIndexOf('/') + 1); // 末段是文件（如 index.html），取其所在目录
+  return b;
+}
+function _assetUrl(p) { return (typeof document !== 'undefined' && document.baseURI) ? new URL(p, _baseDir()).href : p; }
+var KOKORO_CDN = _assetUrl('./vendor/kokoro/dist/kokoro.bundle.js');
+var PIPER_CDN  = _assetUrl('./vendor/piper/piper-tts-web.js');
 var ttsEngine = {
   kokoro: null, piper: null, piperSession: null,
   kokoroOk: null, piperOk: null,   // null=未试, true=可用, false=失败
@@ -2047,7 +2055,7 @@ function _probeModule(url) {
 // 启动后检查离线模型目录是否可达；不可达则给出明确指引（避免只看懂一句报错）
 function checkOfflineVendor() {
   if (_fileMode || !_openEngineWanted()) return;
-  _probeModule('/vendor/piper/piper-tts-web.js').then(function (d) {
+  _probeModule(PIPER_CDN).then(function (d) {
     if (d) _setEngineStatus('⚠️ 离线语音模型未就绪：' + d + '（已自动使用系统/云端语音）');
   });
 }
@@ -2069,17 +2077,23 @@ async function _ensureKokoro() {
   var KokoroTTS = mod && mod.KokoroTTS ? mod.KokoroTTS : (mod && mod.default && mod.default.KokoroTTS);
   if (!KokoroTTS) throw new Error('KokoroTTS not found');
   // 配置 transformers 本地模型加载：bundle 已内联 transformers，其 env 随包导出（mod.env）。
-  // 禁止回退 HuggingFace Hub（被墙），改为从本地 HTTP 路径 /models/kokoro 直接 fetch。
+  // 禁止回退 HuggingFace Hub（被墙），模型路径用相对 URL 解析到同源 models/kokoro（兼容 NAS 子路径部署）。
   try {
     if (mod.env) {
       mod.env.allowRemoteModels = false;
       mod.env.allowLocalModels = true;
-      mod.env.localModelPath = '/';
+      mod.env.localModelPath = './';
+      // 单线程 wasm：不依赖 SharedArrayBuffer，故无需服务器发 COOP/COEP 头（普通 NAS 静态服务器即可）。
+      if (mod.env.backends && mod.env.backends.onnx && mod.env.backends.onnx.wasm) {
+        try { mod.env.backends.onnx.wasm.numThreads = 1; } catch (e) {}
+        try { mod.env.backends.onnx.wasm.proxy = false; } catch (e) {}
+      }
     }
   } catch (e) {}
   var device = 'wasm';   // 本地离线优先用 wasm，稳定可靠
   var dtype = 'q8';
-  ttsEngine.kokoro = await KokoroTTS.from_pretrained('/models/kokoro', {
+  var _kokoroModelUrl = _assetUrl('./models/kokoro');
+  ttsEngine.kokoro = await KokoroTTS.from_pretrained(_kokoroModelUrl, {
     dtype: dtype, device: device,
     progress_callback: function (p) { if (p && p.status === 'progress') _setEngineStatus('Kokoro 加载中 ' + Math.round((p.progress || 0) * 100) + '%'); }
   });

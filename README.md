@@ -2,7 +2,7 @@
 
 一个面向中小学学生的**语文 + 英语默写练习工具**。纯前端单文件网页应用，打开即用，支持汉字词语、英语单词、英语句子与课文默写，内置语音朗读、手写板、自动批改、错题订正与抄写练习。
 
-> 当前版本：`1.0.38` ｜ 许可证：ISC ｜ 形态：单文件网页应用（PWA，可打包 Android）
+> 当前版本：`1.0.39` ｜ 许可证：ISC ｜ 形态：单文件网页应用（PWA，可打包 Android）
 
 ## ✨ 功能特性
 
@@ -103,6 +103,13 @@ dictation-assistant/
 - 单人维护，仓库尚在持续打磨中。
 
 ## 📌 更新日志 (Changelog)
+
+### v1.0.39（2026-10-10）
+- **NAS / 子路径部署修复：离线资源全改相对路径 + 单线程 wasm（去掉 COOP/COEP 依赖）。** 用户在 NAS（http 5077）下 Kokoro/Piper 仍 404。根因：`index.html` 与 `vendor/piper/piper-tts-web.js` 内大量**根绝对路径**（`/vendor/...`、`/models/...`）在子路径或 web 根未指到本项目时解析不到 → 404。
+  - `index.html`：import map 三处 onnxruntime 映射、`KOKORO_CDN`/`PIPER_CDN`（统一用 `_assetUrl()` 基于 `document.baseURI` 算绝对 URL，并处理「URL 无尾斜杠」取目录）、`checkOfflineVendor` 探测、Kokoro 模型路径全部相对化，兼容任意挂载子路径。
+  - `vendor/piper/piper-tts-web.js`（离线修改，需重新同步到部署目录）：`HF_BASE`/`ONNX_BASE`/`WASM_BASE` 改为基于 `import.meta.url` 模块自定位；第 289 行 ort bundle 的 `import()` 改相对；**第 292 行 `numThreads` 由 `navigator.hardwareConcurrency` 改为 `1`**——去掉对 SharedArrayBuffer 的依赖，不再要求服务器发 COOP/COEP 头。
+  - Kokoro 侧同样在 `mod.env.backends.onnx.wasm` 强制 `numThreads=1`、`proxy=false`。
+- **注意**：`vendor/`、`models/` 被 .gitignore 忽略，本次改了 `vendor/piper/piper-tts-web.js`，部署时务必把更新后的该文件（连同 `vendor/`、`models/` 整目录）重新同步到 NAS；Piper 还需本地 `models/piper/en/en_US/lessac/medium/en_US-lessac-medium.onnx` 存在（当前该目录为空，缺失则 Piper 会在模型阶段失败，需补下或保证可联网拉取）。
 
 ### v1.0.38（2026-10-09）
 - **Kokoro 离线加载彻底修好（用 esbuild 打真正自包含的单文件 bundle）。** 真机仍报 Kokoro `Failed to fetch dynamically imported module`。根因：jsDelivr 的 `@huggingface/transformers@3.5.1/+esm` 并非单文件，而是带几百个指向 `src/` 源码树的相对懒加载 re-export 的门面；手写改写路径只会越改越乱（曾出现嵌套三层的 `/vendor/kokoro/vendor/kokoro/...` 坏路径），且 transformers 源码用模板字面量动态 `import()` 分块，根本无法静态托管。改用 esbuild 在本地把 `kokoro-js` 连同 `transformers` **源码**（`src/transformers.js`）整体打包：开启 `splitting`、`alias` 强制指向源码入口、`onnxruntime-web/onnxruntime-common/onnxruntime-node` 标记 external，产出 `vendor/kokoro/dist/kokoro.bundle.js`（3.6MB，自包含）。剥离注释后实测：真实 `import()` 调用 0、相对路径 404 风险 0，external 是裸 `onnxruntime-web`/`onnxruntime-node`/`onnxruntime-common`（均经 import map 解析到 Piper 共用的 `ort.all.bundle.min.mjs`；已确认该 bundle 导出 `Tensor`，可满足 `import { Tensor } from "onnxruntime-common"`）。

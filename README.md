@@ -2,7 +2,7 @@
 
 一个面向中小学学生的**语文 + 英语默写练习工具**。纯前端单文件网页应用，打开即用，支持汉字词语、英语单词、英语句子与课文默写，内置语音朗读、手写板、自动批改、错题订正与抄写练习。
 
-> 当前版本：`1.0.42` ｜ 许可证：ISC ｜ 形态：单文件网页应用（PWA，可打包 Android）
+> 当前版本：`1.0.43` ｜ 许可证：ISC ｜ 形态：单文件网页应用（PWA，可打包 Android）
 
 ## ✨ 功能特性
 
@@ -103,6 +103,12 @@ dictation-assistant/
 - 单人维护，仓库尚在持续打磨中。
 
 ## 📌 更新日志 (Changelog)
+
+### v1.0.43（2026-10-10）
+- **QNAP / Apache Web 服务器（Web Station）兼容性修复**：很多 NAS 内置 Apache 不把 `.mjs` 识别为 JavaScript，导致离线引擎模块被浏览器以「MIME 不符」拒绝。改为：
+  - 新增 `vendor/piper/onnxruntime-web/ort.all.bundle.min.js`（与 `.mjs` 同内容），`index.html` 的 import map 三处 `onnxruntime-*` 全部指向 `.js`；`piper-tts-web.js` 第 290 行动态 `import()` 也改指 `.js` —— **彻底不依赖 `.mjs` 的 MIME**。
+  - 新增根目录 `.htaccess`：为 `.mjs`/`.wasm`/`.onnx`/`.bin`/`.data` 兜底正确 MIME（对 nginx 部署无副作用）。
+  - 部署提醒：iPad Safari 需 **iOS 16.4+** 才支持 import maps（否则离线 Kokoro/Piper 不加载，但系统/云端语音仍可用）；访问务必带结尾斜杠。
 
 ### v1.0.41（2026-10-10）
 - **file:// 直接双击打开也能加载离线语音（Kokoro / Piper）。** 浏览器在 `file://` 下禁止 ES 模块、import map、动态 `import()` 与 `fetch` 本地文件，原「强制回退系统语音」行不通。改为：

@@ -6,9 +6,9 @@
 <script type="importmap">
 {
   "imports": {
-    "onnxruntime-web": "./vendor/piper/onnxruntime-web/ort.all.bundle.min.mjs",
-    "onnxruntime-node": "./vendor/piper/onnxruntime-web/ort.all.bundle.min.mjs",
-    "onnxruntime-common": "./vendor/piper/onnxruntime-web/ort.all.bundle.min.mjs"
+    "onnxruntime-web": "./vendor/piper/onnxruntime-web/ort.all.bundle.min.js",
+    "onnxruntime-node": "./vendor/piper/onnxruntime-web/ort.all.bundle.min.js",
+    "onnxruntime-common": "./vendor/piper/onnxruntime-web/ort.all.bundle.min.js"
   }
 }
 </script>
@@ -478,7 +478,7 @@ textarea{resize:vertical;min-height:80px}
 
 <script>// ===== Selection =====
 let selectedWordIndices = new Set();
-const APP_VERSION = '1.0.42';
+const APP_VERSION = '1.0.43';
 
 function onWordCheck(cb) {
   var idx = parseInt(cb.dataset.idx);

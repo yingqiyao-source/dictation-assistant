@@ -2,7 +2,7 @@
 
 一个面向中小学学生的**语文 + 英语默写练习工具**。纯前端单文件网页应用，打开即用，支持汉字词语、英语单词、英语句子与课文默写，内置语音朗读、手写板、自动批改、错题订正与抄写练习。
 
-> 当前版本：`1.0.40` ｜ 许可证：ISC ｜ 形态：单文件网页应用（PWA，可打包 Android）
+> 当前版本：`1.0.41` ｜ 许可证：ISC ｜ 形态：单文件网页应用（PWA，可打包 Android）
 
 ## ✨ 功能特性
 
@@ -103,6 +103,14 @@ dictation-assistant/
 - 单人维护，仓库尚在持续打磨中。
 
 ## 📌 更新日志 (Changelog)
+
+### v1.0.41（2026-10-10）
+- **file:// 直接双击打开也能加载离线语音（Kokoro / Piper）。** 浏览器在 `file://` 下禁止 ES 模块、import map、动态 `import()` 与 `fetch` 本地文件，原「强制回退系统语音」行不通。改为：
+  - 新增经典脚本(IIFE)引擎包：`vendor/kokoro/dist/kokoro.iife.js`（Kokoro，ort 已内联）、`vendor/piper/onnxruntime-web/ort.all.bundle.iife.js`（`window.__ORT__`）、`vendor/piper/piper-o91UDS6e.iife.js`（分词器，挂 `window.PIPER_PHONEMIZE_WRAP`）、`vendor/piper/piper-tts-web.file.js`（经典版 Piper，去 `import.meta`、改读全局、去 `export`）。
+  - `index.html` 在 `file://` 下：注入上述经典脚本 → 显示「选择应用根目录」选择器（`webkitdirectory`）→ 用户选含 `vendor/` 与 `models/` 的文件夹后，安装 `fetch`/`XMLHttpRequest` 内存拦截器，把模型/wasm 从内存喂给引擎。引擎内部 `fetch` 走相对路径，由拦截器映射回所选目录文件；命中不到的资源返回 404（供 Piper 回退本地 wasm）。
+  - 仅拦截 `vendor/`、`models/` 路径，其余（如 Azure 云端 TTS）仍走原生 `fetch`，不破坏在线功能。
+  - **仍缺 Piper 语音模型**：`models/piper/en/en_US/lessac/` 目录为空，需补 `en_US-lessac-medium.onnx` 与同名词 `.onnx.json`；Kokoro 的 `models/kokoro` 已齐全。
+  - 注：`vendor/`、`models/` 被 .gitignore 忽略，新 IIFE 文件与改过的 `piper-tts-web.file.js` 只存在于本地工作区；部署（NAS/本地）时务必把整个 `vendor/`、`models/` 重新同步；HTTP/NAS 部署逻辑不变（仍用相对路径模块 + import map）。
 
 ### v1.0.40（2026-10-10）
 - **部署健壮性：补齐「无尾斜杠子路径」场景。** v1.0.39 已把资源改为相对路径，但若以 `http://host/sub`（无尾斜杠）打开，浏览器会把 `./vendor` 解析成丢段的 `http://host/vendor` → 仍 404。`_baseDir()` 现对「末段无扩展名」补斜杠，且明确部署铁律：**务必带尾斜杠访问**（如 `http://nas:5077/dictation/`，或让 NAS 把 `/dictation` 重定向到 `/dictation/`），否则 import map 的相对地址仍会丢段。

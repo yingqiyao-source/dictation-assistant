@@ -478,7 +478,7 @@ textarea{resize:vertical;min-height:80px}
 
 <script>// ===== Selection =====
 let selectedWordIndices = new Set();
-const APP_VERSION = '1.0.40';
+const APP_VERSION = '1.0.41';
 
 function onWordCheck(cb) {
   var idx = parseInt(cb.dataset.idx);
@@ -2015,10 +2015,14 @@ function speak(text) {
 }
 
 // ===== 开源本地语音引擎（Kokoro / Piper）：纯前端、免费、自动降级 =====
-// 通过动态 import 加载本地 vendor 下的 ESM 模块；测试环境可注入 window.__importModule 覆盖
-// file:// 模式下浏览器禁止 fetch 本地模型，_fileMode 为真时强制回退系统语音（不持久化，避免改掉用户偏好）
+// HTTP/NAS 部署：通过动态 import 加载本地 vendor 下的 ESM 模块（import map 解析 onnxruntime）。
+// file:// 部署（直接双击 index.html）：浏览器禁止 ES 模块 / fetch 本地文件，
+//   故改用"经典脚本(IIFE) + 内存虚拟文件系统"：引擎脚本挂到 window，模型由用户选择的根目录喂入。
+//   详见 _setupFileMode() / _installFileShim()。
 var _fileMode = false;
 if (typeof location !== 'undefined' && location.protocol === 'file:') _fileMode = true;
+var _fileModelsReady = false;   // file:// 下用户已选目录并装好 shim 后置真
+var _fileMap = null;            // Map<相对路径, {file, mime}>
 function _baseDir() {
   var b = (typeof document !== 'undefined' && (document.baseURI || location.href)) || '';
   if (b.slice(-1) === '/') return b;
@@ -2055,7 +2059,8 @@ function _probeModule(url) {
 }
 // 启动后检查离线模型目录是否可达；不可达则给出明确指引（避免只看懂一句报错）
 function checkOfflineVendor() {
-  if (_fileMode || !_openEngineWanted()) return;
+  if (_fileMode) { _setupFileMode(); return; }   // file://：始终引导用户选择目录（不探测 HTTP）
+  if (!_openEngineWanted()) return;
   _probeModule(PIPER_CDN).then(function (d) {
     if (d) _setEngineStatus('⚠️ 离线语音模型未就绪：' + d + '（已自动使用系统/云端语音）');
   });
@@ -2064,30 +2069,40 @@ function _hasWebGPU() {
   try { return !!(typeof navigator !== 'undefined' && navigator.gpu && navigator.gpu.requestAdapter); } catch (e) { return false; }
 }
 function _resolveEngine() {
-  if (_fileMode) return 'system';   // file:// 下离线模型无法加载，强制走系统语音
   var m = (voiceSettings.engine || 'auto');
   if (m === 'kokoro' || m === 'piper' || m === 'system') return m;
   return _hasWebGPU() ? 'kokoro' : 'piper';   // auto：有 WebGPU 用 Kokoro，否则 Piper
 }
-function _openEngineWanted() { return !_fileMode && (voiceSettings.engine || 'auto') !== 'system'; }
+function _openEngineWanted() { return (voiceSettings.engine || 'auto') !== 'system'; }
 async function _ensureKokoro() {
   if (ttsEngine.kokoroOk === false) return Promise.reject(new Error(ttsEngine.kokoroErr || 'kokoro disabled'));
   if (ttsEngine.kokoro) return ttsEngine.kokoro;
   _setEngineStatus('正在加载 Kokoro 模型…');
-  var mod = await _importModule(KOKORO_CDN);
-  var KokoroTTS = mod && mod.KokoroTTS ? mod.KokoroTTS : (mod && mod.default && mod.default.KokoroTTS);
-  if (!KokoroTTS) throw new Error('KokoroTTS not found');
+  var KokoroTTS, mod_env;
+  if (_fileMode) {
+    if (!_fileModelsReady) throw new Error('file:// 模式尚未选择应用根目录，无法加载本地模型（请在设置中选择含 vendor/ 与 models/ 的文件夹）');
+    await _waitFor(function () { return !!window.KOKORO; }, 8000, 'Kokoro 脚本未加载');
+    var KM = window.KOKORO;
+    if (!KM || !KM.KokoroTTS) throw new Error('Kokoro 脚本未加载（请确认 vendor/kokoro/dist/kokoro.iife.js 存在）');
+    KokoroTTS = KM.KokoroTTS;
+    mod_env = KM.env;
+  } else {
+    var mod = await _importModule(KOKORO_CDN);
+    KokoroTTS = mod && mod.KokoroTTS ? mod.KokoroTTS : (mod && mod.default && mod.default.KokoroTTS);
+    if (!KokoroTTS) throw new Error('KokoroTTS not found');
+    mod_env = mod.env;
+  }
   // 配置 transformers 本地模型加载：bundle 已内联 transformers，其 env 随包导出（mod.env）。
   // 禁止回退 HuggingFace Hub（被墙），模型路径用相对 URL 解析到同源 models/kokoro（兼容 NAS 子路径部署）。
   try {
-    if (mod.env) {
-      mod.env.allowRemoteModels = false;
-      mod.env.allowLocalModels = true;
-      mod.env.localModelPath = './';
+    if (mod_env) {
+      mod_env.allowRemoteModels = false;
+      mod_env.allowLocalModels = true;
+      mod_env.localModelPath = './';
       // 单线程 wasm：不依赖 SharedArrayBuffer，故无需服务器发 COOP/COEP 头（普通 NAS 静态服务器即可）。
-      if (mod.env.backends && mod.env.backends.onnx && mod.env.backends.onnx.wasm) {
-        try { mod.env.backends.onnx.wasm.numThreads = 1; } catch (e) {}
-        try { mod.env.backends.onnx.wasm.proxy = false; } catch (e) {}
+      if (mod_env.backends && mod_env.backends.onnx && mod_env.backends.onnx.wasm) {
+        try { mod_env.backends.onnx.wasm.numThreads = 1; } catch (e) {}
+        try { mod_env.backends.onnx.wasm.proxy = false; } catch (e) {}
       }
     }
   } catch (e) {}
@@ -2106,21 +2121,177 @@ async function _ensurePiper() {
   if (ttsEngine.piperOk === false) return Promise.reject(new Error(ttsEngine.piperErr || 'piper disabled'));
   if (ttsEngine.piperSession) return ttsEngine.piperSession;
   _setEngineStatus('正在加载 Piper 模型…');
-  var mod = await _importModule(PIPER_CDN);
-  ttsEngine.piper = mod;
-  var SessionCls = (mod && mod.TtsSession) ? mod.TtsSession : null;
+  var SessionCls;
+  if (_fileMode) {
+    if (!_fileModelsReady) throw new Error('file:// 模式尚未选择应用根目录，无法加载本地模型（请在设置中选择含 vendor/ 与 models/ 的文件夹）');
+    await _waitFor(function () { return !!(window.PIPER_TTS && window.PIPER_TTS.TtsSession); }, 8000, 'Piper 脚本未加载');
+    var PM = window.PIPER_TTS;
+    if (!PM || !PM.TtsSession) throw new Error('Piper 脚本未加载（请确认 vendor/piper/piper-tts-web.file.js 存在）');
+    SessionCls = PM.TtsSession;
+  } else {
+    var mod = await _importModule(PIPER_CDN);
+    ttsEngine.piper = mod;
+    SessionCls = (mod && mod.TtsSession) ? mod.TtsSession : null;
+  }
+  if (!SessionCls) throw new Error('Piper TtsSession not found');
   var sess;
-  if (SessionCls && SessionCls.create) {
-    sess = await SessionCls.create({ voiceId: ttsEngine.piperVoice, fallbackStrategy: 'auto',
+  if (SessionCls.create) {
+    sess = await SessionCls.create({ voiceId: ttsEngine.piperVoice, fallbackStrategy: (_fileMode ? 'local' : 'auto'),
       progress: function (p) { if (p && p.total) _setEngineStatus('Piper 下载中 ' + Math.round(p.loaded / p.total * 100) + '%'); } });
   } else {
-    sess = await mod.TtsSession({ voiceId: ttsEngine.piperVoice, fallbackStrategy: 'auto' });
+    sess = await SessionCls({ voiceId: ttsEngine.piperVoice, fallbackStrategy: (_fileMode ? 'local' : 'auto') });
   }
   ttsEngine.piperSession = sess;
   ttsEngine.piperOk = true;
   _setEngineStatus('Piper 就绪');
   return sess;
 }
+// ---- file:// 离线模式：经典脚本(IIFE) + 内存虚拟文件系统 ----
+// 浏览器在 file:// 下禁止 ES 模块 / fetch 本地文件。这里把引擎 JS 用经典 <script> 挂到 window，
+// 模型/ wasm 文件由用户选择的应用根目录喂入，并用 fetch/XHR 拦截器从内存返回，供引擎读取。
+function _waitFor(pred, ms, label) {
+  return new Promise(function (resolve, reject) {
+    var t0 = Date.now();
+    (function loop() {
+      if (pred()) return resolve();
+      if (Date.now() - t0 > (ms || 8000)) return reject(new Error(label || '等待超时'));
+      setTimeout(loop, 100);
+    })();
+  });
+}
+function _fileMime(path) {
+  var ext = (path.split('.').pop() || '').toLowerCase();
+  var m = { 'js': 'text/javascript', 'mjs': 'text/javascript', 'json': 'application/json',
+    'onnx': 'application/octet-stream', 'bin': 'application/octet-stream', 'wasm': 'application/wasm',
+    'data': 'application/octet-stream', 'txt': 'text/plain', 'html': 'text/html', 'css': 'text/css' };
+  return m[ext] || 'application/octet-stream';
+}
+function _fileAppDir() {
+  try { var d = new URL('.', document.baseURI).pathname; return d.replace(/[^\/]$/, '$&/'); } catch (e) { return '/'; }
+}
+function _normalizeReqUrl(u) {
+  var raw = (typeof u === 'string') ? u : (u && u.url) || '';
+  var pathname;
+  try { pathname = new URL(raw, document.baseURI).pathname; }
+  catch (e) { pathname = raw.replace(/^file:\/\//, '').replace(/^\/+/, ''); }
+  var appDir = _fileAppDir();
+  if (appDir !== '/' && pathname.indexOf(appDir) === 0) pathname = pathname.slice(appDir.length);
+  pathname = pathname.replace(/^\/+/, '');
+  var parts = pathname.split('/'), out = [];
+  for (var i = 0; i < parts.length; i++) {
+    if (parts[i] === '..') out.pop();
+    else if (parts[i] && parts[i] !== '.') out.push(parts[i]);
+  }
+  return out.join('/');
+}
+function _lookupFile(rel) {
+  if (!_fileMap) return null;
+  if (_fileMap.has(rel)) return _fileMap.get(rel);
+  var found = null;
+  _fileMap.forEach(function (v, k) { if (!found && (k === rel || k.endsWith('/' + rel))) found = v; });
+  return found;
+}
+function _isLocalAsset(url) {
+  // 只对本地 vendor/ 与 models/ 资源做拦截；其余（如 Azure 云端 TTS）委托原生 fetch
+  var rel = _normalizeReqUrl(url);
+  return rel.indexOf('vendor/') === 0 || rel.indexOf('models/') === 0;
+}
+function _installFileShim(fileMap) {
+  _fileMap = fileMap;
+  var nativeFetch = (typeof window.fetch === 'function') ? window.fetch.bind(window) : null;
+  window.fetch = function (input, init) {
+    var url = (typeof input === 'string') ? input : (input && input.url) || '';
+    if (!_isLocalAsset(url)) {
+      // 非本地资源：委托原生 fetch（云端 TTS / 在线接口等）
+      if (nativeFetch) return nativeFetch(input, init);
+      return Promise.reject(new TypeError('Failed to fetch ' + url));
+    }
+    var rel = _normalizeReqUrl(url);
+    var hit = _lookupFile(rel);
+    var method = (init && init.method) || (input && input.method) || 'GET';
+    if (hit) {
+      return hit.file.arrayBuffer().then(function (ab) {
+        return new Response(ab, { status: 200, statusText: 'OK',
+          headers: { 'Content-Type': hit.mime, 'Content-Length': String(ab.byteLength) } });
+      });
+    }
+    // 未命中：HEAD/GET 均返回 404（供 Piper 探测回退到本地 wasm 路径）
+    return Promise.resolve(new Response(null, { status: 404, statusText: 'Not Found', headers: { 'Content-Type': 'text/plain' } }));
+  };
+  // XMLHttpRequest 拦截（供 emscripten 加载 piper wasm/data）
+  if (typeof XMLHttpRequest !== 'undefined') {
+    function FakeXHR() { this._url = ''; this._method = 'GET'; this.status = 0; this.statusText = '';
+      this.response = null; this.responseText = ''; this.responseType = ''; this.readyState = 0;
+      this.onload = null; this.onerror = null; this.onreadystatechange = null; this._headers = {}; this._ctype = ''; }
+    FakeXHR.prototype.open = function (m, u) { this._method = m; this._url = u; this.readyState = 1; if (this.onreadystatechange) this.onreadystatechange(); };
+    FakeXHR.prototype.setRequestHeader = function (k, v) { this._headers[k] = v; };
+    FakeXHR.prototype.getAllResponseHeaders = function () { return ''; };
+    FakeXHR.prototype.getResponseHeader = function (k) { return (k && k.toLowerCase() === 'content-type') ? (this._ctype || 'application/octet-stream') : null; };
+    FakeXHR.prototype.send = function () {
+      var self = this;
+      if (!_isLocalAsset(this._url)) {
+        // 非本地：还原原生 XHR（若已被我们替换则返回 404 兜底，避免卡死）
+        if (nativeFetch) { nativeFetch(this._url).then(function () { self._fail(); }).catch(function () { self._fail(); }); return; }
+        self._fail(); return;
+      }
+      var hit = _lookupFile(_normalizeReqUrl(this._url));
+      if (!hit) { self._fail(); return; }
+      hit.file.arrayBuffer().then(function (ab) {
+        self._ctype = hit.mime; self.response = ab;
+        self.responseText = (self.responseType === 'text') ? (new TextDecoder().decode(ab)) : '';
+        self.status = 200; self.statusText = 'OK'; self.readyState = 4;
+        if (self.onreadystatechange) self.onreadystatechange();
+        if (self.onload) self.onload();
+      }).catch(function () { self._fail(); });
+    };
+    FakeXHR.prototype._fail = function () { this.status = 404; this.statusText = 'Not Found'; this.readyState = 4; if (this.onerror) this.onerror(); if (this.onreadystatechange) this.onreadystatechange(); };
+    window.XMLHttpRequest = FakeXHR;
+  }
+}
+function _setupFileMode() {
+  if (!_fileMode) return;
+  if (window.__fileModeSetup) return;   // 幂等：只注入一次
+  window.__fileModeSetup = true;
+  // 注入经典引擎脚本（IIFE，挂到 window）。用同步顺序加载（async=false）保证就绪。
+  ['./vendor/piper/onnxruntime-web/ort.all.bundle.iife.js',
+   './vendor/kokoro/dist/kokoro.iife.js',
+   './vendor/piper/piper-o91UDS6e.iife.js',
+   './vendor/piper/piper-tts-web.file.js'].forEach(function (src) {
+    var s = document.createElement('script'); s.src = src; s.async = false; document.head.appendChild(s);
+  });
+  _showFilePicker();
+}
+function _showFilePicker() {
+  if (document.getElementById('filePickerWrap')) return;
+  var el = document.getElementById('engine-status');
+  if (!el) { setTimeout(_showFilePicker, 400); return; }   // 等待 DOM 就绪
+  var wrap = document.createElement('div');
+  wrap.id = 'filePickerWrap';
+  wrap.style.cssText = 'margin:8px 0;padding:10px 12px;border:1px dashed #FF7A1A;border-radius:12px;background:#fff7ef;font-size:13px;color:#7a4a00;line-height:1.6';
+  wrap.innerHTML = '离线语音（file:// 模式）：浏览器禁止直接读取本地模型，请选择本应用<b>根目录</b>（含 vendor/ 与 models/ 的文件夹），即可加载 Kokoro / Piper。<br>' +
+    '<input type="file" id="filePickerInput" webkitdirectory directory multiple style="margin-top:6px;width:100%"><br>' +
+    '<span id="filePickerMsg" style="color:#2E9E5B"></span>';
+  if (el.parentNode) el.parentNode.insertBefore(wrap, el);
+  var input = document.getElementById('filePickerInput');
+  if (!input) return;
+  input.addEventListener('change', function (e) {
+    var files = e.target.files || [];
+    if (!files.length) return;
+    var map = new Map();
+    var rootSeg = (files[0].webkitRelativePath || '').split('/')[0] || '';
+    Array.prototype.forEach.call(files, function (f) {
+      var rp = f.webkitRelativePath || f.name;
+      if (rootSeg && rp.indexOf(rootSeg + '/') === 0) rp = rp.slice(rootSeg.length + 1);
+      map.set(rp, { file: f, mime: _fileMime(rp) });
+    });
+    _installFileShim(map);
+    _fileModelsReady = true;
+    var msg = document.getElementById('filePickerMsg');
+    if (msg) msg.textContent = '已载入 ' + map.size + ' 个文件，离线语音就绪，可开始朗读 / 点「立即下载语音模型」。';
+    _setEngineStatus('离线语音就绪（file://）：Kokoro / Piper 可用');
+  });
+}
+
 var _localAudio = null;
 function _stopLocalAudio() {
   if (_localAudio) {
@@ -2175,18 +2346,27 @@ async function _speakOpen(text, rate, done) {
   _speakWeb(text, 'en-US', rate, done);
 }
 function preloadOpenEngine() {
-  if (_fileMode) { _setEngineStatus('当前以 file:// 打开，离线模型无法加载，请改用本地服务器'); return; }
   var eng = _resolveEngine();
-  if (eng === 'kokoro') {
-    _setEngineStatus('开始加载 Kokoro…');
-    _ensureKokoro().then(function () { _setEngineStatus('Kokoro 就绪'); })
-      .catch(function (e) { ttsEngine.kokoroOk = false; ttsEngine.kokoroErr = (e && e.message) || 'unknown';
-        _probeModule(KOKORO_CDN).then(function (d) { _setEngineStatus('Kokoro 加载失败：' + ttsEngine.kokoroErr + (d ? ' ｜ ' + d : '') + '（已回退系统语音）'); }); });
-  } else if (eng === 'piper') {
-    _setEngineStatus('开始加载 Piper…');
-    _ensurePiper().then(function () { _setEngineStatus('Piper 就绪'); })
-      .catch(function (e) { ttsEngine.piperOk = false; ttsEngine.piperErr = (e && e.message) || 'unknown';
-        _probeModule(PIPER_CDN).then(function (d) { _setEngineStatus('Piper 加载失败：' + ttsEngine.piperErr + (d ? ' ｜ ' + d : '') + '（已回退系统语音）'); }); });
+  if (eng === 'kokoro' || eng === 'piper') {
+    var name = (eng === 'kokoro') ? 'Kokoro' : 'Piper';
+    _setEngineStatus('开始加载 ' + name + '…');
+    var p = (eng === 'kokoro') ? _ensureKokoro() : _ensurePiper();
+    p.then(function () { _setEngineStatus(name + ' 就绪'); })
+      .catch(function (e) {
+        var msg = (e && e.message) || 'unknown';
+        // "尚未选择目录"等可恢复的报错不要永久禁用引擎，允许用户选目录后重试
+        if (msg.indexOf('尚未选择') < 0) {
+          if (eng === 'kokoro') { ttsEngine.kokoroOk = false; ttsEngine.kokoroErr = msg; }
+          else { ttsEngine.piperOk = false; ttsEngine.piperErr = msg; }
+        }
+        if (_fileMode) {
+          _setEngineStatus(name + ' 暂未就绪：' + msg + '（选好根目录后重试即可）');
+        } else {
+          _probeModule(eng === 'kokoro' ? KOKORO_CDN : PIPER_CDN).then(function (d) {
+            _setEngineStatus(name + ' 加载失败：' + msg + (d ? ' ｜ ' + d : '') + '（已回退系统语音）');
+          });
+        }
+      });
   } else {
     _setEngineStatus('当前为系统/云端引擎，无需下载模型');
   }

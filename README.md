@@ -2,7 +2,7 @@
 
 一个面向中小学学生的**语文 + 英语默写练习工具**。纯前端单文件网页应用，打开即用，支持汉字词语、英语单词、英语句子与课文默写，内置语音朗读、手写板、自动批改、错题订正与抄写练习。
 
-> 当前版本：`1.0.41` ｜ 许可证：ISC ｜ 形态：单文件网页应用（PWA，可打包 Android）
+> 当前版本：`1.0.42` ｜ 许可证：ISC ｜ 形态：单文件网页应用（PWA，可打包 Android）
 
 ## ✨ 功能特性
 
@@ -111,6 +111,10 @@ dictation-assistant/
   - 仅拦截 `vendor/`、`models/` 路径，其余（如 Azure 云端 TTS）仍走原生 `fetch`，不破坏在线功能。
   - **仍缺 Piper 语音模型**：`models/piper/en/en_US/lessac/` 目录为空，需补 `en_US-lessac-medium.onnx` 与同名词 `.onnx.json`；Kokoro 的 `models/kokoro` 已齐全。
   - 注：`vendor/`、`models/` 被 .gitignore 忽略，新 IIFE 文件与改过的 `piper-tts-web.file.js` 只存在于本地工作区；部署（NAS/本地）时务必把整个 `vendor/`、`models/` 重新同步；HTTP/NAS 部署逻辑不变（仍用相对路径模块 + import map）。
+
+### v1.0.42（2026-10-10）
+- **修：`file://` 下 ONNX Runtime 的 wasm 后端被浏览器拦截（报 `no available backend` / `Failed to resolve module specifier ... .jsep.mjs` / `import() is called from a CORS-cross-origin script`）。** 根因是 Chrome/Edge 在 `file://` 下把本地脚本视为「跨源」，动态 `import()` 其 wasm 后端模块时基准 URL 被置为 `about:blank` 而失败——与路径对错无关（路径 `./vendor/piper/onnxruntime-web/...` 解析正确）。唯一解法：用 **`--allow-file-access-from-files`** 启动浏览器。新增 `start-file.bat`：自动定位 Chrome/Edge，带该参数 + 独立 `--user-data-dir`（不污染日常配置）打开 `index.html`。直接双击 `index.html`（不带该参数）必然失败，故页面顶部提示与加载失败提示都已改为引导使用 `start-file.bat`（或改用 `serve.bat` 走本地服务器，最稳）。
+- 新增文件：`start-file.bat`（file:// 专用启动器）。`vendor/`、`models/` 仍需整目录同步（被 .gitignore 忽略）。
 
 ### v1.0.40（2026-10-10）
 - **部署健壮性：补齐「无尾斜杠子路径」场景。** v1.0.39 已把资源改为相对路径，但若以 `http://host/sub`（无尾斜杠）打开，浏览器会把 `./vendor` 解析成丢段的 `http://host/vendor` → 仍 404。`_baseDir()` 现对「末段无扩展名」补斜杠，且明确部署铁律：**务必带尾斜杠访问**（如 `http://nas:5077/dictation/`，或让 NAS 把 `/dictation` 重定向到 `/dictation/`），否则 import map 的相对地址仍会丢段。

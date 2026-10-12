@@ -104,6 +104,12 @@ dictation-assistant/
 
 ## 📌 更新日志 (Changelog)
 
+### v1.0.44（2026-10-12）
+- **修复 NAS 子路径部署下 Kokoro 离线加载失败（确定性 bug）。** 之前 `index.html` 把模型路径拼成绝对 `http(s)` URL 传给 transformers.js，而离线模式 `env.allowRemoteModels=false` 会拦截任何 `http(s)` 路径 → 报 `attempted to load a remote file`。改为传**相对路径** `models/kokoro`，transformers 走本地 `getFile()`（按 `document.baseURI` 解析到同源子路径，兼容 QNAP `/Public/...` 等任意子路径），不再被拦截。
+- **修复 Kokoro 语音 `.bin` 离线必失败。** `kokoro.bundle.js` / `kokoro.iife.js` 中语音权重原先硬编码从 HuggingFace 拉取（`.../resolve/main/voices/af_heart.bin`），离线环境拿不到。改为按 `document.baseURI` 取本地 `./models/kokoro/voices/<voice>.bin`，HTTP 与 `file://`(内存 shim) 两种模式均生效。
+- **Piper 加载失败给出明确指引。** 原先模型配置文件缺失时只抛 `JSON Parse error: Unrecognized token '<'`（拿到的是 HTML 404 页）。`piper-tts-web.js` 的 `fetchBlob` 现检查 HTTP 状态并提示「请确认 NAS 上该模型文件已完整拷贝」；`index.html` 引擎加载失败提示追加「多半是 NAS 上模型文件未完整拷贝，请把整个应用文件夹（含 vendor/ 与 models/）重新覆盖再刷新」。
+- 注意：NAS 部署务必**完整拷贝 `vendor/` 与 `models/`**（尤其 `models/piper/` 含 ~63MB 的 `en_US-lessac-medium.onnx` 及其 `.onnx.json`），旧副本若只有空目录会导致 Piper 报上述 404。
+
 ### v1.0.43（2026-10-10）
 - **QNAP / Apache Web 服务器（Web Station）兼容性修复**：很多 NAS 内置 Apache 不把 `.mjs` 识别为 JavaScript，导致离线引擎模块被浏览器以「MIME 不符」拒绝。改为：
   - 新增 `vendor/piper/onnxruntime-web/ort.all.bundle.min.js`（与 `.mjs` 同内容），`index.html` 的 import map 三处 `onnxruntime-*` 全部指向 `.js`；`piper-tts-web.js` 第 290 行动态 `import()` 也改指 `.js` —— **彻底不依赖 `.mjs` 的 MIME**。

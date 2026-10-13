@@ -104,6 +104,15 @@ dictation-assistant/
 
 ## 📌 更新日志 (Changelog)
 
+### v1.0.45（2026-10-13）
+- **修复 Piper 在 NAS 子路径下 404（路径多拼了一层 `vendor/`）。** `vendor/piper/piper-tts-web.js` 的 `HF_BASE` 原先按 `../models/piper` 从 `vendor/piper/` 计算，只上跳一级 → `vendor/models/piper`（错误）。改为 `../../models/piper`，正确落到与 `vendor/` 同级的 `models/piper`。此前你 NAS 上那条 `essac`(应为 `lessac`) 的报错也来自旧脚本副本——**务必把整个应用文件夹重新覆盖**到 NAS 再刷新。
+- **Kokoro 朗读卡顿/连点卡死优化（四件套）：**
+  1. **WebGPU 优先**：有 WebGPU（iPad / 桌面独显）时推理走 GPU，快数倍且不占主线程；不可用时自动回退 wasm（单线程，普通 NAS 静态服务器即可，无需 COOP/COEP）。
+  2. **同词语音缓存**：同一词/同一语速的推理结果缓存，重读≈零延迟，不再每次重新跑几秒 wasm。
+  3. **单槽控制器 + 打断**：推理期间快速连点只保留「最新一次」请求，且新朗读先打断上一段播放，避免 wasm 推理在主线程堆叠导致卡死。
+  4. **模型预热**：加载完成后预热一次极短推理，消除「首次朗读冷启动慢」。
+- 注：朗读按钮在推理进行中会短暂置灰，属于正常的防卡死保护；同词重读会立即从缓存播放。
+
 ### v1.0.44（2026-10-12）
 - **修复 NAS 子路径部署下 Kokoro 离线加载失败（确定性 bug）。** 之前 `index.html` 把模型路径拼成绝对 `http(s)` URL 传给 transformers.js，而离线模式 `env.allowRemoteModels=false` 会拦截任何 `http(s)` 路径 → 报 `attempted to load a remote file`。改为传**相对路径** `models/kokoro`，transformers 走本地 `getFile()`（按 `document.baseURI` 解析到同源子路径，兼容 QNAP `/Public/...` 等任意子路径），不再被拦截。
 - **修复 Kokoro 语音 `.bin` 离线必失败。** `kokoro.bundle.js` / `kokoro.iife.js` 中语音权重原先硬编码从 HuggingFace 拉取（`.../resolve/main/voices/af_heart.bin`），离线环境拿不到。改为按 `document.baseURI` 取本地 `./models/kokoro/voices/<voice>.bin`，HTTP 与 `file://`(内存 shim) 两种模式均生效。

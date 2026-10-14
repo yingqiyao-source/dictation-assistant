@@ -478,7 +478,7 @@ textarea{resize:vertical;min-height:80px}
 
 <script>// ===== Selection =====
 let selectedWordIndices = new Set();
-const APP_VERSION = '1.0.45';
+const APP_VERSION = '1.0.46';
 
 function onWordCheck(cb) {
   var idx = parseInt(cb.dataset.idx);
@@ -2068,6 +2068,13 @@ function checkOfflineVendor() {
 function _hasWebGPU() {
   try { return !!(typeof navigator !== 'undefined' && navigator.gpu && navigator.gpu.requestAdapter); } catch (e) { return false; }
 }
+// iPad/iPhone 上 WebGPU 尚不成熟、易卡死；这类设备强制走 wasm（稳定，仅略慢），桌面独显才用 webgpu
+function _isIOS() {
+  try {
+    var ua = (navigator.userAgent || '').toLowerCase();
+    return /iphone|ipad|ipod/.test(ua) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  } catch (e) { return false; }
+}
 function _resolveEngine() {
   var m = (voiceSettings.engine || 'auto');
   if (m === 'kokoro' || m === 'piper' || m === 'system') return m;
@@ -2077,85 +2084,97 @@ function _openEngineWanted() { return (voiceSettings.engine || 'auto') !== 'syst
 async function _ensureKokoro() {
   if (ttsEngine.kokoroOk === false) return Promise.reject(new Error(ttsEngine.kokoroErr || 'kokoro disabled'));
   if (ttsEngine.kokoro) return ttsEngine.kokoro;
+  if (ttsEngine.kokoroLoading) return ttsEngine.kokoroLoading;   // 并发去重：多次调用只加载一次，避免重复拉取 92MB
   _setEngineStatus('正在加载 Kokoro 模型…');
-  var KokoroTTS, mod_env;
-  if (_fileMode) {
-    if (!_fileModelsReady) throw new Error('file:// 模式尚未选择应用根目录，无法加载本地模型（请在设置中选择含 vendor/ 与 models/ 的文件夹）');
-    await _waitFor(function () { return !!window.KOKORO; }, 8000, 'Kokoro 脚本未加载');
-    var KM = window.KOKORO;
-    if (!KM || !KM.KokoroTTS) throw new Error('Kokoro 脚本未加载（请确认 vendor/kokoro/dist/kokoro.iife.js 存在）');
-    KokoroTTS = KM.KokoroTTS;
-    mod_env = KM.env;
-  } else {
-    var mod = await _importModule(KOKORO_CDN);
-    KokoroTTS = mod && mod.KokoroTTS ? mod.KokoroTTS : (mod && mod.default && mod.default.KokoroTTS);
-    if (!KokoroTTS) throw new Error('KokoroTTS not found');
-    mod_env = mod.env;
-  }
-  // 配置 transformers 本地模型加载：bundle 已内联 transformers，其 env 随包导出（mod.env）。
-  // 禁止回退 HuggingFace Hub（被墙），模型路径用相对 URL 解析到同源 models/kokoro（兼容 NAS 子路径部署）。
-  try {
-    if (mod_env) {
-      mod_env.allowRemoteModels = false;
-      mod_env.allowLocalModels = true;
-      mod_env.localModelPath = './';
-      // 单线程 wasm：不依赖 SharedArrayBuffer，故无需服务器发 COOP/COEP 头（普通 NAS 静态服务器即可）。
-      if (mod_env.backends && mod_env.backends.onnx && mod_env.backends.onnx.wasm) {
-        try { mod_env.backends.onnx.wasm.numThreads = 1; } catch (e) {}
-        try { mod_env.backends.onnx.wasm.proxy = false; } catch (e) {}
-      }
+  var job = (async function () {
+    var KokoroTTS, mod_env;
+    if (_fileMode) {
+      if (!_fileModelsReady) throw new Error('file:// 模式尚未选择应用根目录，无法加载本地模型（请在设置中选择含 vendor/ 与 models/ 的文件夹）');
+      await _waitFor(function () { return !!window.KOKORO; }, 8000, 'Kokoro 脚本未加载');
+      var KM = window.KOKORO;
+      if (!KM || !KM.KokoroTTS) throw new Error('Kokoro 脚本未加载（请确认 vendor/kokoro/dist/kokoro.iife.js 存在）');
+      KokoroTTS = KM.KokoroTTS;
+      mod_env = KM.env;
+    } else {
+      var mod = await _importModule(KOKORO_CDN);
+      KokoroTTS = mod && mod.KokoroTTS ? mod.KokoroTTS : (mod && mod.default && mod.default.KokoroTTS);
+      if (!KokoroTTS) throw new Error('KokoroTTS not found');
+      mod_env = mod.env;
     }
-  } catch (e) {}
-  var dtype = 'q8';
-  // 设备选择：有 WebGPU（iPad/桌面显卡）优先用 webgpu，推理快数倍且不阻塞主线程；
-  // 否则回退 wasm（单线程，稳定兼容普通 NAS 静态服务器，无需 COOP/COEP 头）。
-  var device = (!_fileMode && _hasWebGPU()) ? 'webgpu' : 'wasm';
-  // 关键：传“相对路径”而非绝对 http(s) URL。transformers.js 仅在 path 为 http(s) 时才视为“远程”，
-  // 传相对路径会走本地 getFile()（按 document.baseURI 解析到同源子路径，天然兼容 NAS 子路径部署），
-  // 既不会触发 allowRemoteModels=false 的拦截，也不依赖服务器目录索引。file:// 模式下则由内存 shim 拦截同名请求。
-  var _kokoroModelUrl = 'models/kokoro';
-  var _kokoroProgress = function (p) { if (p && p.status === 'progress') _setEngineStatus('Kokoro 加载中 ' + Math.round((p.progress || 0) * 100) + '%'); };
-  try {
-    ttsEngine.kokoro = await KokoroTTS.from_pretrained(_kokoroModelUrl, { dtype: dtype, device: device, progress_callback: _kokoroProgress });
-  } catch (e) {
-    if (device === 'webgpu') {  // WebGPU 不可用（部分浏览器未开启/不支持）→ 自动回退 wasm
-      device = 'wasm';
-      ttsEngine.kokoro = await KokoroTTS.from_pretrained(_kokoroModelUrl, { dtype: dtype, device: 'wasm', progress_callback: _kokoroProgress });
-    } else throw e;
-  }
-  ttsEngine.kokoroOk = true;
-  _setEngineStatus('Kokoro 就绪');
-  await _warmKokoro(ttsEngine.kokoro);   // 预热一次推理（编译 wasm/JIT），消除首次朗读冷启动慢
-  return ttsEngine.kokoro;
+    // 配置 transformers 本地模型加载：bundle 已内联 transformers，其 env 随包导出（mod.env）。
+    // 禁止回退 HuggingFace Hub（被墙），模型路径用相对 URL 解析到同源 models/kokoro（兼容 NAS 子路径部署）。
+    try {
+      if (mod_env) {
+        mod_env.allowRemoteModels = false;
+        mod_env.allowLocalModels = true;
+        mod_env.localModelPath = './';
+        if (!_fileMode) { try { mod_env.useBrowserCache = true; } catch (e) {} }  // 浏览器缓存模型文件：再次打开秒级加载，无需重下 92MB
+        // 单线程 wasm：不依赖 SharedArrayBuffer，故无需服务器发 COOP/COEP 头（普通 NAS 静态服务器即可）。
+        if (mod_env.backends && mod_env.backends.onnx && mod_env.backends.onnx.wasm) {
+          try { mod_env.backends.onnx.wasm.numThreads = 1; } catch (e) {}
+          try { mod_env.backends.onnx.wasm.proxy = false; } catch (e) {}
+        }
+      }
+    } catch (e) {}
+    var dtype = 'q8';
+    // 设备选择：桌面独显(WebGPU) 优先，推理快数倍且不阻塞主线程；iPad/iPhone 与无 WebGPU 的浏览器回退 wasm（稳定）。
+    var device = (!_fileMode && _hasWebGPU() && !_isIOS()) ? 'webgpu' : 'wasm';
+    // 关键：传“相对路径”而非绝对 http(s) URL。transformers.js 仅在 path 为 http(s) 时才视为“远程”，
+    // 传相对路径会走本地 getFile()（按 document.baseURI 解析到同源子路径，天然兼容 NAS 子路径部署），
+    // 既不会触发 allowRemoteModels=false 的拦截，也不依赖服务器目录索引。file:// 模式下则由内存 shim 拦截同名请求。
+    var _kokoroModelUrl = 'models/kokoro';
+    var _kokoroProgress = function (p) { if (p && p.status === 'progress') _setEngineStatus('Kokoro 加载中 ' + Math.round((p.progress || 0) * 100) + '%'); };
+    try {
+      ttsEngine.kokoro = await KokoroTTS.from_pretrained(_kokoroModelUrl, { dtype: dtype, device: device, progress_callback: _kokoroProgress });
+    } catch (e) {
+      if (device === 'webgpu') {  // WebGPU 不可用（部分浏览器未开启/不支持）→ 自动回退 wasm
+        device = 'wasm';
+        ttsEngine.kokoro = await KokoroTTS.from_pretrained(_kokoroModelUrl, { dtype: dtype, device: 'wasm', progress_callback: _kokoroProgress });
+      } else throw e;
+    }
+    ttsEngine.kokoroOk = true;
+    _setEngineStatus('Kokoro 就绪');
+    await _warmKokoro(ttsEngine.kokoro);   // 预热一次推理（编译 wasm/JIT），消除首次朗读冷启动慢
+    return ttsEngine.kokoro;
+  })();
+  var wrapped = job.finally(function () { ttsEngine.kokoroLoading = null; });
+  ttsEngine.kokoroLoading = wrapped;
+  return wrapped;
 }
 async function _ensurePiper() {
   if (ttsEngine.piperOk === false) return Promise.reject(new Error(ttsEngine.piperErr || 'piper disabled'));
   if (ttsEngine.piperSession) return ttsEngine.piperSession;
+  if (ttsEngine.piperLoading) return ttsEngine.piperLoading;   // 并发去重
   _setEngineStatus('正在加载 Piper 模型…');
-  var SessionCls;
-  if (_fileMode) {
-    if (!_fileModelsReady) throw new Error('file:// 模式尚未选择应用根目录，无法加载本地模型（请在设置中选择含 vendor/ 与 models/ 的文件夹）');
-    await _waitFor(function () { return !!(window.PIPER_TTS && window.PIPER_TTS.TtsSession); }, 8000, 'Piper 脚本未加载');
-    var PM = window.PIPER_TTS;
-    if (!PM || !PM.TtsSession) throw new Error('Piper 脚本未加载（请确认 vendor/piper/piper-tts-web.file.js 存在）');
-    SessionCls = PM.TtsSession;
-  } else {
-    var mod = await _importModule(PIPER_CDN);
-    ttsEngine.piper = mod;
-    SessionCls = (mod && mod.TtsSession) ? mod.TtsSession : null;
-  }
-  if (!SessionCls) throw new Error('Piper TtsSession not found');
-  var sess;
-  if (SessionCls.create) {
-    sess = await SessionCls.create({ voiceId: ttsEngine.piperVoice, fallbackStrategy: (_fileMode ? 'local' : 'auto'),
-      progress: function (p) { if (p && p.total) _setEngineStatus('Piper 下载中 ' + Math.round(p.loaded / p.total * 100) + '%'); } });
-  } else {
-    sess = await SessionCls({ voiceId: ttsEngine.piperVoice, fallbackStrategy: (_fileMode ? 'local' : 'auto') });
-  }
-  ttsEngine.piperSession = sess;
-  ttsEngine.piperOk = true;
-  _setEngineStatus('Piper 就绪');
-  return sess;
+  var job = (async function () {
+    var SessionCls;
+    if (_fileMode) {
+      if (!_fileModelsReady) throw new Error('file:// 模式尚未选择应用根目录，无法加载本地模型（请在设置中选择含 vendor/ 与 models/ 的文件夹）');
+      await _waitFor(function () { return !!(window.PIPER_TTS && window.PIPER_TTS.TtsSession); }, 8000, 'Piper 脚本未加载');
+      var PM = window.PIPER_TTS;
+      if (!PM || !PM.TtsSession) throw new Error('Piper 脚本未加载（请确认 vendor/piper/piper-tts-web.file.js 存在）');
+      SessionCls = PM.TtsSession;
+    } else {
+      var mod = await _importModule(PIPER_CDN);
+      ttsEngine.piper = mod;
+      SessionCls = (mod && mod.TtsSession) ? mod.TtsSession : null;
+    }
+    if (!SessionCls) throw new Error('Piper TtsSession not found');
+    var sess;
+    if (SessionCls.create) {
+      sess = await SessionCls.create({ voiceId: ttsEngine.piperVoice, fallbackStrategy: (_fileMode ? 'local' : 'auto'),
+        progress: function (p) { if (p && p.total) _setEngineStatus('Piper 下载中 ' + Math.round(p.loaded / p.total * 100) + '%'); } });
+    } else {
+      sess = await SessionCls({ voiceId: ttsEngine.piperVoice, fallbackStrategy: (_fileMode ? 'local' : 'auto') });
+    }
+    ttsEngine.piperSession = sess;
+    ttsEngine.piperOk = true;
+    _setEngineStatus('Piper 就绪');
+    return sess;
+  })();
+  var wrapped = job.finally(function () { ttsEngine.piperLoading = null; });
+  ttsEngine.piperLoading = wrapped;
+  return wrapped;
 }
 // ---- file:// 离线模式：经典脚本(IIFE) + 内存虚拟文件系统 ----
 // 浏览器在 file:// 下禁止 ES 模块 / fetch 本地文件。这里把引擎 JS 用经典 <script> 挂到 window，
@@ -2311,21 +2330,42 @@ function _stopLocalAudio() {
     _localAudio = null;
   }
 }
-function _playFloat32(float32, sr, done) {
+// 单一复用 AudioContext：iOS Safari 对“每次 new AudioContext”有数量上限(约 6 个)，超限后静音且 onended 不触发，
+// 会导致“朗读几次后没声音 + 单槽控制器卡死”。复用同一 context 并适时 resume() 可彻底解决。
+var _audioCtx = null;
+function _getAudioCtx() {
+  if (_audioCtx) return _audioCtx;
   var AC = window.AudioContext || window.webkitAudioContext;
-  if (!AC || !float32) { done(); return; }
+  if (!AC) return null;
+  try { _audioCtx = new AC(); } catch (e) { _audioCtx = null; }
+  return _audioCtx;
+}
+function _playFloat32(float32, sr, done) {
+  if (!float32) { done(); return; }
+  var ctx = _getAudioCtx();
+  if (!ctx) { done(); return; }
+  var finished = false;
+  function finish() { if (finished) return; finished = true; done(); }
   try {
-    var ctx = new AC();
     var buf = ctx.createBuffer(1, float32.length, sr || 24000);
     buf.copyToChannel(float32, 0);
     var src = ctx.createBufferSource();
     src.buffer = buf;
-    src.onended = function () { try { ctx.close(); } catch (e) {} done(); };
+    src.onended = function () { try { src.disconnect(); } catch (e) {} finish(); };
     src.connect(ctx.destination);
-    _localAudio = { stop: function () { try { src.stop(); } catch (e) {} try { ctx.close(); } catch (e) {} } };
-    src.start();
-  } catch (e) { done(); }
+    _localAudio = { stop: function () { try { src.stop(); } catch (e) {} try { src.disconnect(); } catch (e) {} } };
+    var startPlay = function () { try { src.start(); } catch (e) { finish(); } };
+    // iOS/部分浏览器 AudioContext 处于 suspended 状态时 start() 不发声，需先 resume()
+    if (ctx.state === 'suspended') { ctx.resume().then(startPlay, startPlay); } else { startPlay(); }
+    // 安全网：若 onended 因异常/被系统挂起未触发，超时强制结束，避免单槽控制器永久卡死无声音
+    var durMs = (float32.length / (sr || 24000)) * 1000;
+    setTimeout(finish, Math.max(6000, durMs + 4000));
+  } catch (e) { finish(); }
 }
+// 首次用户手势时解锁/恢复 AudioContext（iOS 要求 resume 在手势内进行，否则后续播放静音）
+['pointerdown', 'touchstart', 'keydown', 'click'].forEach(function (ev) {
+  try { window.addEventListener(ev, function () { var c = _getAudioCtx(); if (c && c.state === 'suspended') { try { c.resume(); } catch (e) {} } }, { passive: true }); } catch (e) {}
+});
 function _playBlob(blob, done) {
   if (!blob || typeof URL === 'undefined' || !URL.createObjectURL) { done(); return; }
   try {
@@ -2342,7 +2382,12 @@ function _speakOpen(text, rate) {
   _stopLocalAudio();                 // 立即打断上一段播放，听感更跟手
   if (_openBusy) { _openLatest = { text: text, rate: rate }; return; }  // 推理中：仅保留最新一次，避免快速连点堆叠卡死
   _openBusy = true;
+  // 兜底看门狗：推理/播放异常导致 done 未触发时强制解锁并续播最新一次，避免“卡死后再无声”
+  var guard = setTimeout(function () {
+    if (_openBusy) { _openBusy = false; var p = _openLatest; _openLatest = null; if (p) _speakOpen(p.text, p.rate); }
+  }, 45000);
   _speakOpenRun(text, rate, function () {
+    clearTimeout(guard);
     _openBusy = false;
     if (_openLatest) { var p = _openLatest; _openLatest = null; _speakOpen(p.text, p.rate); }
   });
@@ -2450,7 +2495,13 @@ function initVoiceSettings() {
     }
   }
   var cc = document.getElementById('cloud-config'); if (cc) cc.style.display = (ce && ce.checked) ? 'block' : 'none';
-  if (_openEngineWanted()) checkOfflineVendor();
+  if (_openEngineWanted()) {
+    checkOfflineVendor();
+    // 自动后台预载离线模型：再次打开应用即可直接朗读，无需手动点“下载语音模型”（模型文件由浏览器缓存，二次打开秒级就绪）
+    if (!_fileMode && ttsEngine.kokoro === null && ttsEngine.piperSession === null) {
+      setTimeout(preloadOpenEngine, 400);
+    }
+  }
 }
 function onVoiceSettingChange() {
   var re = document.getElementById('voice-rate-en'), rz = document.getElementById('voice-rate-zh');

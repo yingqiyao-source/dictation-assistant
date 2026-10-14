@@ -104,6 +104,11 @@ dictation-assistant/
 
 ## 📌 更新日志 (Changelog)
 
+### v1.0.46（2026-10-14）
+- **修复「朗读几次后卡死且没声音」**：根因是每次播放都 `new AudioContext()`，而 **iOS Safari 对 AudioContext 实例数有上限（约 6 个）**，超限后新 context 处于 `suspended` 状态、`start()` 不出声且 `onended` 永不触发 → 单槽控制器 `_openBusy` 永久锁死 → 后续点击全部静音。改为**单一复用 AudioContext + 播放前 `resume()` + `onended` 安全网超时**；并在单槽控制器增加 **45s 看门狗**，推理/播放异常时强制解锁续播，杜绝永久卡死。
+- **iPad 朗读稳定性**：iPad/iPhone 上 WebGPU 尚不成熟易卡死，改为**这些设备强制走 wasm**（稳定，仅略慢），桌面独显才用 webgpu。
+- **「再次打开无需手动加载模型」**：进入默写页时**自动后台预载**离线模型（引擎为系统语音时跳过）；并开启 transformers.js **浏览器缓存**（`useBrowserCache`），模型文件第二次打开即秒级从浏览器缓存就绪，不再重下 92MB。模型加载改为**并发去重**，多次调用只拉取一次。
+
 ### v1.0.45（2026-10-13）
 - **修复 Piper 在 NAS 子路径下 404（路径多拼了一层 `vendor/`）。** `vendor/piper/piper-tts-web.js` 的 `HF_BASE` 原先按 `../models/piper` 从 `vendor/piper/` 计算，只上跳一级 → `vendor/models/piper`（错误）。改为 `../../models/piper`，正确落到与 `vendor/` 同级的 `models/piper`。此前你 NAS 上那条 `essac`(应为 `lessac`) 的报错也来自旧脚本副本——**务必把整个应用文件夹重新覆盖**到 NAS 再刷新。
 - **Kokoro 朗读卡顿/连点卡死优化（四件套）：**

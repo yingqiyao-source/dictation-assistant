@@ -2,7 +2,7 @@
 
 一个面向中小学学生的**语文 + 英语默写练习工具**。纯前端单文件网页应用，打开即用，支持汉字词语、英语单词、英语句子与课文默写，内置语音朗读、手写板、自动批改、错题订正与抄写练习。
 
-> 当前版本：`1.0.43` ｜ 许可证：ISC ｜ 形态：单文件网页应用（PWA，可打包 Android）
+> 当前版本：`1.0.48` ｜ 许可证：ISC ｜ 形态：单文件网页应用（PWA，可打包 Android）
 
 ## ✨ 功能特性
 
@@ -35,24 +35,22 @@
 - OCR 批改需要联网从 CDN 加载 Tesseract.js 模型。
 
 ### 方式二：打包为 Android APK
+
+APK 采用**极简 WebView 壳 + 原生系统 TTS 桥**：
+- 离线神经网络模型（Sherpa/Piper，约 330MB）**不打进 APK**——WebView 装不下也跑不动；
+- 安卓端语音统一走系统 TTS（`android.speech.tts.TextToSpeech`，中文/英文即时、零模型、零卡顿）；
+- 网页 `index.html` 检测到 `window.AndroidTTS` 时自动走原生桥，覆盖网页的离线引擎选择。
+
 ```bash
-# 1. 安装依赖
-npm install
-
-# 2. 添加 Android 平台（首次执行，会生成 android/ 目录）
-npx cap add android
-
-# 3. 同步静态资源到 Android
-npx cap sync android
-
-# 4. 构建 APK（需要 Android SDK + JDK 21）
-cd android
-.\gradlew.bat assembleDebug
-# APK 输出：android/app/build/outputs/apk/debug/app-debug.apk
+# 直接用 Android SDK build-tools 打包（无需 Gradle / Capacitor）
+cd android_build
+bash build_apk.sh
+# APK 输出：android_build/build/dictation-assistant-v1.0.48.apk（约 70KB）
 ```
-构建环境要求：JDK 21（Capacitor 8.x）、Android SDK Platform 35 + Build Tools 35.0.0、Gradle 8.14.3+。
+构建环境要求：Android SDK Platform 35 + Build Tools 35.0.0、`aapt2`/`d8`/`apksigner`/`zipalign`（脚本内已写绝对路径，按需修改）、JDK 17+。
+签名用 `android_build/keystore/debug.keystore`（debug 密钥，别名 `androiddebugkey`）。
 
-CI 自动构建见 `.github/workflows/build-apk.yml`（推送后自动产出 APK）。
+> 注：若设备缺少中文语音数据包，首次启动会引导安装；请确认系统已装中文 TTS 语音（多数国产安卓机自带）。
 
 ## 📦 项目结构
 
@@ -103,6 +101,11 @@ dictation-assistant/
 - 单人维护，仓库尚在持续打磨中。
 
 ## 📌 更新日志 (Changelog)
+
+### v1.0.47（2026-10-16）
+- **彻底移除 Kokoro 模型**：删除 Kokoro 全部代码、设置项与 `vendor/kokoro`、`models/kokoro`（约 100MB）。Kokoro（89MB 模型 + 主线程 wasm 推理 + 开屏自动预载）是「一打开就卡好久、使用中卡死」的根因。
+- **默认引擎改为系统语音（瞬时·零卡顿）**：开屏不再自动预载任何离线模型；系统语音走浏览器 `speechSynthesis`，异步播放、不占主线程，从根上消除卡顿与卡死。
+- **Piper 改为可选且懒加载**：仅在设置中主动选「Piper 离线」、且首次朗读该引擎时才加载（约 60MB），不再拖慢开屏。
 
 ### v1.0.46（2026-10-14）
 - **修复「朗读几次后卡死且没声音」**：根因是每次播放都 `new AudioContext()`，而 **iOS Safari 对 AudioContext 实例数有上限（约 6 个）**，超限后新 context 处于 `suspended` 状态、`start()` 不出声且 `onended` 永不触发 → 单槽控制器 `_openBusy` 永久锁死 → 后续点击全部静音。改为**单一复用 AudioContext + 播放前 `resume()` + `onended` 安全网超时**；并在单槽控制器增加 **45s 看门狗**，推理/播放异常时强制解锁续播，杜绝永久卡死。
@@ -359,3 +362,14 @@ ISC
 - [Capacitor](https://capacitorjs.com/) — 跨平台原生运行时
 - [Tesseract.js](https://tesseract.projectnaptha.com/) — 手写识别/OCR
 - [jsDelivr](https://www.jsdelivr.com/) — 前端 CDN
+
+## 🎙️ 语音引擎现状（v1.0.48）
+- **默认引擎**：系统语音（浏览器 `speechSynthesis`，异步播放、不占主线程，瞬时零卡顿）。
+- **中文离线**：可选 **Sherpa-ONNX**（matcha-icefall-zh-baker，Web Worker 后台推理，不卡界面；模型约 140MB，仅首次下载并缓存）。在「语音」页选「Sherpa 离线」后，首次朗读自动加载。
+- **英文离线**：可选 **Piper**（lessac 已内置 / libritts 更耐听，首次朗读自动从 CDN 下载）。
+- **英文云端**：可选 **微软 Azure 神经 TTS**（需自备订阅密钥，仅存本机）。
+- **独立「语音」页**：底部导航新增「语音」入口，中英文引擎、语速、系统音色、离线模型下载集中设置。
+- **加载提示条**：离线引擎（Sherpa / Piper）下载/初始化时，页面顶部出现非阻塞进度条与动画，明确告知「正在加载」，避免误以为页面卡死。
+- **已彻底移除 Kokoro**（89MB 模型 + 主线程 wasm 推理 + 开屏预载，是「一打开就卡好久、使用中卡死」的根因）。
+- **预加载优化（消除首词延迟）**：一旦在「语音」页选定离线引擎，应用启动即后台预载该引擎（仅首次，中文约 140MB / 英文约 78MB），之后朗读即时；切换引擎时也会立即预热。中文 matcha 已是 sherpa-onnx 中最轻量档（VITS 中文模型普遍 115MB+，无更小可替），故以预加载而非换模型来解决延迟。
+- **安卓 APK 走原生系统 TTS**：APK 内 `MainActivity` 通过 `@JavascriptInterface` 暴露 `AndroidTTS` 桥，网页检测到后直接用系统 `TextToSpeech`（中文/英文即时、零模型、零卡顿）；离线神经网络模型不入 APK（否则约 330MB，WebView 装不下也跑不动）。

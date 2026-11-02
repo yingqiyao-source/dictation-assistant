@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # 本地静态服务器：用于加载离线语音模型（ESM/wasm/onnx 需经 HTTP 提供正确 MIME）
-import http.server, socketserver, os
+import http.server, socketserver, os, sys
 
 os.chdir(os.path.dirname(os.path.abspath(__file__)))
 
@@ -34,9 +34,16 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         super().end_headers()
 
 
-PORT = 8000
+PORT = int(os.environ.get('PORT', 8000))
+# 允许命令行覆盖端口：python serve.py --port 5077 或 serve.py 5077
+for _a in sys.argv[1:]:
+    if _a == '--port' and len(sys.argv) > sys.argv.index(_a) + 1:
+        PORT = int(sys.argv[sys.argv.index(_a) + 1])
+    elif _a.isdigit():
+        PORT = int(_a)
+
 if __name__ == '__main__':
-    with socketserver.TCPServer(('', PORT), Handler) as httpd:
-        print(f'默写助手本地服务已启动： http://localhost:{PORT}')
-        print('在浏览器打开上面的地址即可使用（含离线语音模型）。按 Ctrl+C 停止。')
+    with socketserver.TCPServer(('0.0.0.0', PORT), Handler) as httpd:
+        print(f'默写助手本地服务已启动： http://0.0.0.0:{PORT}  （按 Ctrl+C 停止）')
+        print('在浏览器打开上面的地址即可使用（含离线语音模型）。')
         httpd.serve_forever()

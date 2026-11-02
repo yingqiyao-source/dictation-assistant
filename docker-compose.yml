@@ -1,0 +1,23 @@
+# 默写助手 · NAS 部署（Docker）
+# 适用：群晖 Container Manager / QNAP Container Station / TrueNAS / 任意支持 Docker 的 NAS
+# 用法（在 docker-compose.yml 所在目录执行）：
+#   docker compose up -d        # 首次会拉取 nginx:alpine
+#   docker compose down         # 停止
+#   docker compose restart      # 改了文件后重启
+# 访问： http://<NAS_IP>:5077/   （结尾斜杠很重要，尤其用子路径挂载时）
+#
+# 注意：本 compose 用「卷挂载」方式把整个应用目录挂进容器，
+#       所以你更新 index.html / vendor / models 后，只需 docker compose restart，无需重新构建镜像。
+
+services:
+  dictation:
+    image: nginx:alpine
+    container_name: dictation-assistant
+    ports:
+      - "5077:80"
+    volumes:
+      # 把当前目录（含 index.html / vendor / models）挂为网站根目录（只读）
+      - ./:/usr/share/nginx/html:ro
+      # 用随附的 nginx 配置覆盖默认站点
+      - ./nginx-nas.conf:/etc/nginx/conf.d/default.conf:ro
+    restart: unless-stopped

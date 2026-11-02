@@ -1,0 +1,13 @@
+# 默写助手 · QNAP/Apache Web 服务器 MIME 兜底
+# 目的：离线语音引擎（Kokoro / Piper）所需的扩展名必须返回正确 MIME，否则浏览器拒绝加载。
+# 说明：nginx（Container Station 部署）会忽略本文件，无副作用。
+
+# ONNX Runtime 的 wasm 后端（.mjs 已尽量改为 .js，此条作为 jsep 等残留 .mjs 的兜底）
+AddType text/javascript .mjs
+# WebAssembly 二进制
+AddType application/wasm .wasm
+# 模型与数据文件
+AddType application/octet-stream .onnx .bin .data
+
+# 关闭目录浏览（安全）
+Options -Indexes

@@ -3,3 +3,6 @@ android/
 www/
 *.msi
 package-lock.json
+
+# 安卓构建产物（由 build_apk.sh 从零生成，含中间 APK/dex/class，勿入仓）
+android_build/build/

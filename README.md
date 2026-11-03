@@ -100,7 +100,29 @@ dictation-assistant/
 - **联网依赖**：语音朗读与 OCR 批改首次使用需联网（CDN 资源）。
 - 单人维护，仓库尚在持续打磨中。
 
+## 🌐 英文释义自动翻译（两级兜底）
+
+预习页与词语管理列表的英文条目（单词 / 句子），**未手填中文释义时会自动翻译并显示**：
+
+- **第一级（默认生效，零下载）**：桌面 Chrome / Edge 138+ 用浏览器内置 `Translator` API（Gemini Nano 本地推理，免费、离线、文字不出设备）。
+- **第二级（可选增强，覆盖手机 / WebView / 旧浏览器）**：当浏览器不支持第一级时，懒加载本地 `transformers.js` + `opus-mt-en-zh` INT8 模型（约 80–180 MB）做设备内翻译，全程不连外部翻译服务。
+- 两级都不可用（或未部署模型）→ 自动隐藏中文，不报错、不影响其它功能。
+- 人工录入的「中文释义」优先级最高，始终优先显示；自动翻译结果标注「自动」以示区分。
+
+**部署第二级（可选）**：在能联网的机器上运行 `tools/fetch_translate_model.sh`，把运行时与模型拉到 `vendor/translate/`；再把 `vendor/` 整目录同步到 NAS / 本地服务器即可。或把 `index.html` 顶部的 `TRANSLATE_LIB_URL` 直接改为 jsdelivr CDN 地址（需 NAS 能访问外网）。
+
+> ⚠️ 注意：第二级为**可选增强**，未部署时仅桌面 Chrome/Edge 有自动翻译；安卓 APK 的 WebView（file://）下 `transformers.js` 的动态加载需另行验证，可能需让 APK 改用本地 http 服务而非 file://（参考语音 Sherpa 的兼容处理）。
+
 ## 📌 更新日志 (Changelog)
+
+### v1.0.49（2026-11-03）
+- **英文释义自动翻译（两级兜底）**：未手填中文的英文条目（单词 / 句子）现在会自动翻译。
+  - 第一级：桌面 Chrome/Edge 138+ 浏览器内置 `Translator` API（免费、离线、隐私）。
+  - 第二级（可选）：浏览器不支持时，懒加载本地 `transformers.js` + `opus-mt-en-zh` INT8 模型兜底，覆盖手机 / WebView / 旧浏览器；模型运行时懒加载、**绝不进 APK**。
+  - 人工录入的「中文释义」优先级最高；自动翻译结果标注「自动」；两级都不可用则优雅隐藏。
+  - 新增 `tools/fetch_translate_model.sh` 一键拉取翻译运行时与模型。
+
+### v1.0.47（2026-10-16）
 
 ### v1.0.47（2026-10-16）
 - **彻底移除 Kokoro 模型**：删除 Kokoro 全部代码、设置项与 `vendor/kokoro`、`models/kokoro`（约 100MB）。Kokoro（89MB 模型 + 主线程 wasm 推理 + 开屏自动预载）是「一打开就卡好久、使用中卡死」的根因。

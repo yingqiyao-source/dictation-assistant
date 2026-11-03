@@ -514,6 +514,40 @@ textarea{resize:vertical;min-height:80px}
     </div>
   </div>
 
+  <div class="card" style="margin-top:12px" >
+    <h3 style="margin-bottom:12px" >🌐 本地翻译模型（英文释义兜底）</h3>
+    <div style="font-size:12px;color:var(--text2);margin-bottom:10px" >启用后，手机 / 安卓 App / 旧浏览器也能自动把英文单词、句子翻译成中文（覆盖桌面浏览器内置翻译之外的设备）。模型从 NAS 按需加载，不进安装包；默认关闭。</div>
+    <div style="margin-bottom:12px" >
+      <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--text2)" >
+        <input type="checkbox" id="translate-enabled" onchange="onTranslateSettingChange()" > 启用本地翻译模型（第二级兜底）
+      </label>
+    </div>
+    <div style="margin-bottom:12px" >
+      <label style="font-size:13px;color:var(--text2)" >transformers.js 库路径</label>
+      <input id="translate-lib" style="margin-top:4px;width:100%;box-sizing:border-box" placeholder="vendor/translate/transformers.min.js" oninput="onTranslateSettingChange()" >
+    </div>
+    <div style="margin-bottom:12px" >
+      <label style="font-size:13px;color:var(--text2)" >opus-mt-en-zh 模型目录</label>
+      <input id="translate-model" style="margin-top:4px;width:100%;box-sizing:border-box" placeholder="vendor/translate/opus-mt-en-zh/" oninput="onTranslateSettingChange()" >
+    </div>
+    <div style="margin-bottom:12px;display:flex;gap:12px" >
+      <div style="flex:1" >
+        <label style="font-size:13px;color:var(--text2)" >量化类型</label>
+        <select id="translate-dtype" style="margin-top:4px;width:100%" onchange="onTranslateSettingChange()" >
+          <option value="q8">q8（量化·约 80-180MB，推荐）</option>
+          <option value="fp32">fp32（全精度·更大）</option>
+        </select>
+      </div>
+      <div style="flex:1" >
+        <label style="display:flex;align-items:center;gap:8px;font-size:13px;color:var(--text2);height:32px;margin-top:20px" >
+          <input type="checkbox" id="translate-webgpu" onchange="onTranslateSettingChange()" > 使用 WebGPU
+        </label>
+      </div>
+    </div>
+    <div id="translate-status" style="font-size:12px;color:#888;margin:4px 2px 8px" >默认关闭；部署模型后勾选「启用」即可生效。</div>
+    <button class="btn btn-primary btn-sm" onclick="saveTranslateSettingsFromUI()" >保存翻译设置</button>
+  </div>
+
   <div id="engine-status" style="font-size:12px;color:#888;margin:10px 2px 0" >默认使用系统语音，瞬时无卡顿；如需离线可选对应引擎</div>
 </div>
 
@@ -1078,7 +1112,7 @@ function switchPage(page) {
   if (page === 'stats') renderStats();
   if (page === 'wrongbook') renderWrongBook();
   if (page === 'dictation') { updateCollectionList(); initVoiceSettings(); }
-  if (page === 'voice') { initVoiceSettings(); }
+  if (page === 'voice') { initVoiceSettings(); populateTranslateSettings(); }
   if (page === 'preview') { renderPreviewCollections(); buildPreviewList(); }
 }
 
@@ -1182,12 +1216,70 @@ function previewClearAll() { _previewAll = false; _previewSelected.clear(); rend
 // 两级都不可用（或未部署模型）→ 隐藏中文，不报错。
 //
 // 部署第二级所需（详见 README「本地翻译模型」一节，或用 tools/fetch_translate_model.sh 一键拉取）：
-//   1) 把 transformers.js v3 的 ESM 构建放到 TRANSLATE_LIB_URL（默认 vendor/translate/transformers.min.js）
-//   2) 把 Xenova/opus-mt-en-zh 的 ONNX 模型目录放到 TRANSLATE_MODEL_URL（默认 vendor/translate/opus-mt-en-zh/）
+//   1) 把 transformers.js v3 的 ESM 构建放到 libUrl（默认 vendor/translate/transformers.min.js）
+//   2) 把 Xenova/opus-mt-en-zh 的 ONNX 模型目录放到 modelUrl（默认 vendor/translate/opus-mt-en-zh/）
+// 以下常量初始为默认值，loadTranslateSettings() 会用「语音」页里保存的设置覆盖（无需改代码）。
 var TRANSLATE_LIB_URL = 'vendor/translate/transformers.min.js'; // transformers.js v3 (ESM)，需自行下载托管到 NAS
 var TRANSLATE_MODEL_URL = 'vendor/translate/opus-mt-en-zh/';     // 本地 opus-mt-en-zh 模型目录
 var TRANSLATE_DTYPE = 'q8';                                      // 与模型文件匹配：量化版 'q8'，fp32 版 'fp32'
 var TRANSLATE_USE_WEBGPU = false;                                // WebView/手机用 wasm 更稳；桌面可试 true 走 webgpu
+
+// 本地翻译模型设置（用户在「语音」页设置，存本机 localStorage，覆盖上面常量，无需改代码）
+var translateSettings = {
+  enabled: false,
+  libUrl: 'vendor/translate/transformers.min.js',
+  modelUrl: 'vendor/translate/opus-mt-en-zh/',
+  dtype: 'q8',
+  useWebgpu: false
+};
+function loadTranslateSettings() {
+  try {
+    var s = JSON.parse(localStorage.getItem('dictation_translate_settings') || '{}');
+    if (s && typeof s === 'object') {
+      if (typeof s.enabled === 'boolean') translateSettings.enabled = s.enabled;
+      if (typeof s.libUrl === 'string' && s.libUrl) translateSettings.libUrl = s.libUrl;
+      if (typeof s.modelUrl === 'string' && s.modelUrl) translateSettings.modelUrl = s.modelUrl;
+      if (typeof s.dtype === 'string' && s.dtype) translateSettings.dtype = s.dtype;
+      if (typeof s.useWebgpu === 'boolean') translateSettings.useWebgpu = s.useWebgpu;
+    }
+  } catch (e) {}
+  TRANSLATE_LIB_URL = translateSettings.libUrl;
+  TRANSLATE_MODEL_URL = translateSettings.modelUrl;
+  TRANSLATE_DTYPE = translateSettings.dtype;
+  TRANSLATE_USE_WEBGPU = translateSettings.useWebgpu;
+}
+function saveTranslateSettings() {
+  translateSettings.libUrl = TRANSLATE_LIB_URL = (translateSettings.libUrl || 'vendor/translate/transformers.min.js');
+  translateSettings.modelUrl = TRANSLATE_MODEL_URL = (translateSettings.modelUrl || 'vendor/translate/opus-mt-en-zh/');
+  translateSettings.dtype = TRANSLATE_DTYPE = (translateSettings.dtype || 'q8');
+  translateSettings.useWebgpu = TRANSLATE_USE_WEBGPU = !!translateSettings.useWebgpu;
+  _localLib = null; _localTranslator = null; _localUnsupported = false; // 重置缓存，下次用新路径重新加载
+  try { localStorage.setItem('dictation_translate_settings', JSON.stringify(translateSettings)); } catch (e) {}
+}
+// 进入语音页时回填 UI
+function populateTranslateSettings() {
+  try {
+    var e = document.getElementById('translate-enabled'); if (e) e.checked = !!translateSettings.enabled;
+    var l = document.getElementById('translate-lib'); if (l) l.value = translateSettings.libUrl;
+    var m = document.getElementById('translate-model'); if (m) m.value = translateSettings.modelUrl;
+    var d = document.getElementById('translate-dtype'); if (d) d.value = translateSettings.dtype;
+    var w = document.getElementById('translate-webgpu'); if (w) w.checked = !!translateSettings.useWebgpu;
+  } catch (e2) {}
+}
+function onTranslateSettingChange() {
+  translateSettings.enabled = !!document.getElementById('translate-enabled').checked;
+  translateSettings.libUrl = (document.getElementById('translate-lib').value || '').trim() || 'vendor/translate/transformers.min.js';
+  translateSettings.modelUrl = (document.getElementById('translate-model').value || '').trim() || 'vendor/translate/opus-mt-en-zh/';
+  translateSettings.dtype = document.getElementById('translate-dtype').value;
+  translateSettings.useWebgpu = !!document.getElementById('translate-webgpu').checked;
+}
+function saveTranslateSettingsFromUI() {
+  onTranslateSettingChange();
+  saveTranslateSettings();
+  var st = document.getElementById('translate-status');
+  if (st) st.textContent = '已保存' + (translateSettings.enabled ? '：本地翻译模型已启用，未填中文的英文条目将自动翻译' : '：本地翻译模型已关闭，仅桌面浏览器内置翻译生效');
+}
+loadTranslateSettings();
 
 var _translatorReady = null;
 var _translatorUnsupported = false;
@@ -1236,6 +1328,7 @@ function _loadTransformersLib() {
 }
 
 function _getLocalTranslator() {
+  if (!translateSettings.enabled) return Promise.reject(new Error('local disabled'));
   if (_localUnsupported) return Promise.reject(new Error('local unsupported'));
   if (_localTranslator) return _localTranslator;
   _localTranslator = _loadTransformersLib().then(function (mod) {
@@ -4096,6 +4189,7 @@ renderWordList();
 updateCollectionList();
 loadVoiceSettings();
 initVoiceSettings();
+populateTranslateSettings();
 checkServeMode();
 
 // 本地语音模型需经 HTTP 加载：file:// 下 fetch 本地模型会被浏览器拦截

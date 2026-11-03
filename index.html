@@ -211,6 +211,10 @@ textarea{resize:vertical;min-height:80px}
 .preview-body{white-space:pre-wrap;color:var(--text)}
 .preview-meta{display:flex;align-items:center;gap:6px;margin-top:8px;flex-wrap:wrap}
 .preview-meta .icon-btn{margin-left:auto;width:34px;height:34px;font-size:16px;border-radius:8px;background:#eef4ff}
+.preview-meaning{margin-top:8px;padding:7px 10px;background:#f1f8f3;border-left:3px solid var(--primary);border-radius:6px;font-size:14px;color:#2c7a4b;line-height:1.5}
+.preview-meaning .zh-label{color:#8aa0b6;font-size:12px;margin-right:6px}
+.preview-meaning.empty{background:#f7f8fa;border-left-color:#d4dae2;color:#aab2bd;font-style:italic}
+.word-meaning{display:block;margin-top:4px;font-size:13px;font-weight:400;color:#2c7a4b}
 </style>
 <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
 </head>
@@ -1202,8 +1206,13 @@ function buildPreviewList() {
     } else {
       textHtml = '<div class="preview-text">' + escapeHtml(w.word) + '</div>';
     }
+    var meaningHtml = '';
+    if ((w.type === 'en' || w.type === 'en-sentence') && w.meaning && w.meaning.trim()) {
+      meaningHtml = '<div class="preview-meaning"><span class="zh-label">中文</span>' + escapeHtml(w.meaning.trim()) + '</div>';
+    }
     return '<div class="preview-item" id="pv-' + i + '" onclick="previewReadItem(' + i + ')">' +
       textHtml +
+      meaningHtml +
       '<div class="preview-meta">' +
         '<span class="tag ' + tagCls + '">' + typeStr + '</span>' +
         (w.collection ? '<span class="tag tag-collection">' + escapeHtml(w.collection) + '</span>' : '') +
@@ -1795,7 +1804,8 @@ function renderWordItem(w, depth) {
   // 英语内容（单词或句子）：含多个单词时可逐词点击朗读；其余类型按原样展示
   var wordTextHtml;
   if (w.type === 'en' || w.type === 'en-sentence') {
-    wordTextHtml = enWordsClickableHtml(w.word, realIdx, 'readWordFromList');
+    wordTextHtml = enWordsClickableHtml(w.word, realIdx, 'readWordFromList') +
+      (w.meaning && w.meaning.trim() ? '<span class="word-meaning">中文：' + escapeHtml(w.meaning.trim()) + '</span>' : '');
   } else {
     wordTextHtml = escapeHtml(w.type === 'textbook' ? (w.title || w.word) : w.word);
   }
@@ -1908,6 +1918,7 @@ function createAddModalElements() {
       <div style="margin-bottom:12px"><label style="font-size:13px;color:var(--text2)">类型</label><select id="add-type" style="margin-top:4px" onchange="onUpdateAddType(this.value)"><option value="cn">语文词语</option><option value="en" selected>英语单词</option><option value="en-sentence">英语句子</option><option value="textbook">课文默写</option></select></div>
       <div style="margin-bottom:12px"><label style="font-size:13px;color:var(--text2)">所属集合</label><select id="add-collection" onchange="onAddCollChange(this)" style="margin-top:4px;width:100%;padding:6px;border-radius:6px;border:1px solid #ddd;background:#fff;font-size:14px"><option value="">— 选择集合（可选）—</option></select></div>
       <div style="margin-bottom:12px"><label style="font-size:13px;color:var(--text2)" id="add-word-label">词语/单词</label><input id="add-word" placeholder="如：璀璨 / beautiful" style="margin-top:4px"></div>
+      <div style="margin-bottom:12px"><label style="font-size:13px;color:var(--text2)">中文释义（可选，英语/英语句子会在预习页显示）</label><input id="add-meaning" placeholder="如：美丽的 / 你好吗？" style="margin-top:4px"></div>
       <div id="add-batch-section" style="margin-bottom:12px"><label style="font-size:13px;color:var(--text2)" id="add-batch-label">批量添加（每行一个）</label><textarea id="add-batch" placeholder="璀璨" style="margin-top:4px"></textarea></div>
       <div id="add-textbook-section" style="margin-bottom:12px;display:none"><label style="font-size:13px;color:var(--text2)">课文内容（原文粘贴）</label><textarea id="add-textbook-content" placeholder="盼望着，春天来了。\n一切都像刚睡醒的样子。\n（内容整体保存，换行符保留在内容中）" style="margin-top:4px;width:100%;box-sizing:border-box;height:160px"></textarea></div>
     </div>
@@ -2015,6 +2026,7 @@ function closeAddModal() {
   document.getElementById('add-word').value = '';
   document.getElementById('add-batch').value = '';
   document.getElementById('add-collection').value = '';
+  var me = document.getElementById('add-meaning'); if (me) me.value = '';
 }
 
 
@@ -2039,7 +2051,8 @@ function saveWord() {
       words[editWordIdx] = { word: (eContent.trim() || eWord), title: (eWord || '未命名'), type: 'textbook', collection: eColl };
     } else {
       if (!eWord) { alert('请输入内容'); return; }
-      words[editWordIdx] = { word: eWord, type: eType, collection: eColl };
+      var eMeaning = (document.getElementById('add-meaning') || {}).value || '';
+      words[editWordIdx] = { word: eWord, type: eType, collection: eColl, meaning: eMeaning };
     }
     editWordIdx = -1;
     saveData();
@@ -2063,14 +2076,18 @@ function saveWord() {
       } else if (type === 'textbook') {
         words.push({ word: trimmed, title: defaultTitle || '未命名', type: type, collection: collection });
       } else {
-        words.push({ word: trimmed, type: type, collection: collection });
+        var entry = { word: trimmed, type: type, collection: collection };
+        var bi = trimmed.indexOf('|');
+        if (bi > -1) { entry.word = trimmed.slice(0, bi).trim(); entry.meaning = trimmed.slice(bi + 1).trim(); }
+        words.push(entry);
       }
     });
   } else if (w) {
     if (type === 'textbook') {
       words.push({ word: w, title: w, type: type, collection: collection });
     } else {
-      words.push({ word: w, type: type, collection: collection });
+      var singleMeaning = (document.getElementById('add-meaning') || {}).value || '';
+      words.push({ word: w, type: type, collection: collection, meaning: singleMeaning });
     }
   }
   // 课文默写：额外保存整篇课文内容（换行不拆分）
@@ -4039,6 +4056,8 @@ function editWord(idx) {
     var tb2 = document.getElementById('add-textbook-content');
     if (tb2) tb2.value = '';
   }
+  var meEl = document.getElementById('add-meaning');
+  if (meEl) meEl.value = (w.type === 'cn' || w.type === 'textbook') ? '' : (w.meaning || '');
   updateAddPlaceholders(w.type || 'cn');
   var batchSection = document.getElementById('add-batch-section');
   if (batchSection) batchSection.style.display = 'none';

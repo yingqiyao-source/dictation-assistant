@@ -109,7 +109,7 @@ dictation-assistant/
 - 两级都不可用（或未部署模型）→ 自动隐藏中文，不报错、不影响其它功能。
 - 人工录入的「中文释义」优先级最高，始终优先显示；自动翻译结果标注「自动」以示区分。
 
-**部署第二级（可选）**：在能联网的机器上运行 `tools/fetch_translate_model.sh`，把运行时与模型拉到 `vendor/translate/`；再把 `vendor/` 整目录同步到 NAS / 本地服务器即可。或把 `index.html` 顶部的 `TRANSLATE_LIB_URL` 直接改为 jsdelivr CDN 地址（需 NAS 能访问外网）。
+**部署第二级（可选）**：在能联网的机器上运行 `tools/fetch_translate_model.sh`，把运行时与模型拉到 `vendor/translate/`；再把 `vendor/` 整目录同步到 NAS / 本地服务器即可。然后进入「语音」页底部的 **🌐 本地翻译模型** 卡片，勾选「启用本地翻译模型」并保存——库路径 / 模型目录 / 量化类型 / WebGPU 均可在该卡片内设置（存本机 localStorage，无需改代码）。
 
 > ⚠️ 注意：第二级为**可选增强**，未部署时仅桌面 Chrome/Edge 有自动翻译；安卓 APK 的 WebView（file://）下 `transformers.js` 的动态加载需另行验证，可能需让 APK 改用本地 http 服务而非 file://（参考语音 Sherpa 的兼容处理）。
 
@@ -121,6 +121,7 @@ dictation-assistant/
   - 第二级（可选）：浏览器不支持时，懒加载本地 `transformers.js` + `opus-mt-en-zh` INT8 模型兜底，覆盖手机 / WebView / 旧浏览器；模型运行时懒加载、**绝不进 APK**。
   - 人工录入的「中文释义」优先级最高；自动翻译结果标注「自动」；两级都不可用则优雅隐藏。
   - 新增 `tools/fetch_translate_model.sh` 一键拉取翻译运行时与模型。
+  - 「语音」页新增 **🌐 本地翻译模型** 设置卡片：可在界面内开关、填库路径 / 模型目录 / 量化类型 / WebGPU，存本机 localStorage，无需改代码。默认关闭。
 
 ### v1.0.47（2026-10-16）
 

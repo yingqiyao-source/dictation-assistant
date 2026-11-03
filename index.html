@@ -214,6 +214,8 @@ textarea{resize:vertical;min-height:80px}
 .preview-meaning{margin-top:8px;padding:7px 10px;background:#f1f8f3;border-left:3px solid var(--primary);border-radius:6px;font-size:14px;color:#2c7a4b;line-height:1.5}
 .preview-meaning .zh-label{color:#8aa0b6;font-size:12px;margin-right:6px}
 .preview-meaning.empty{background:#f7f8fa;border-left-color:#d4dae2;color:#aab2bd;font-style:italic}
+.zh-auto{display:inline-block;margin-left:5px;padding:0 6px;border:1px solid #d4dae2;border-radius:8px;font-size:11px;color:#9aa3af;font-style:normal;vertical-align:middle}
+.zh-auto-status{color:#9aa3af;font-size:12px;font-style:normal}
 .word-meaning{display:block;margin-top:4px;font-size:13px;font-weight:400;color:#2c7a4b}
 </style>
 <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
@@ -1171,6 +1173,84 @@ function togglePrevColl(el) {
 function previewSelAll() { _previewAll = true; _previewSelected.clear(); renderPreviewCollections(); }
 function previewClearAll() { _previewAll = false; _previewSelected.clear(); renderPreviewCollections(); }
 
+// ===== 浏览器内置翻译（en->zh）渐进增强 =====
+// 手动录入的 meaning 优先；未填时，桌面 Chrome/Edge 138+ 用浏览器内置 Translator 在设备内自动翻译（免费、离线、不联网、不发外部）。
+// 不支持的浏览器（手机/WebView/旧版）优雅降级：隐藏中文，不报错。
+var _translatorReady = null;
+var _translatorUnsupported = false;
+var _translateCache = {};
+var _trPendings = [];
+var _trRunning = 0;
+var _trMax = 3;
+
+function _getTranslator() {
+  if (_translatorUnsupported) return Promise.reject(new Error('unsupported'));
+  if (_translatorReady) return _translatorReady;
+  _translatorReady = (async function () {
+    if (typeof Translator === 'undefined' || !self.Translator) throw new Error('no Translator API');
+    var avail;
+    try {
+      avail = await self.Translator.availability({ sourceLanguage: 'en', targetLanguage: 'zh' });
+    } catch (e) { throw e; }
+    if (!avail || avail === 'unavailable') throw new Error('unavailable');
+    return await self.Translator.create({
+      sourceLanguage: 'en', targetLanguage: 'zh',
+      monitor: function (m) {
+        if (m && m.addEventListener) m.addEventListener('downloadprogress', function () {});
+      }
+    });
+  })();
+  _translatorReady.catch(function () { _translatorUnsupported = true; _translatorReady = null; });
+  return _translatorReady;
+}
+
+function browserTranslate(text) {
+  text = (text || '').trim();
+  if (!text) return Promise.reject(new Error('empty'));
+  if (Object.prototype.hasOwnProperty.call(_translateCache, text)) return Promise.resolve(_translateCache[text]);
+  return _getTranslator().then(function (t) { return t.translate(text); }).then(function (res) {
+    var out = (res || '').trim();
+    _translateCache[text] = out;
+    return out;
+  });
+}
+
+function _pumpTranslate() {
+  while (_trRunning < _trMax && _trPendings.length) {
+    var job = _trPendings.shift();
+    _trRunning++;
+    (function (j) {
+      browserTranslate(j.text).then(function (zh) {
+        try { j.onDone(zh || null, null); } catch (e) {}
+      }).catch(function () {
+        try { j.onDone(null, 'err'); } catch (e) {}
+      }).then(function () {
+        _trRunning--;
+        _pumpTranslate();
+      });
+    })(job);
+  }
+}
+
+function enqueueTranslate(text, onDone) {
+  _trPendings.push({ text: text, onDone: onDone });
+  _pumpTranslate();
+}
+
+function autoTranslateFill(el, enText, kind) {
+  if (!el) return;
+  enqueueTranslate(enText, function (zh) {
+    if (!zh) { el.style.display = 'none'; return; }
+    if (kind === 'preview') {
+      el.className = 'preview-meaning';
+      el.innerHTML = '<span class="zh-label">中文</span>' + escapeHtml(zh) + ' <span class="zh-auto">自动</span>';
+    } else {
+      el.className = 'word-meaning';
+      el.innerHTML = '中文：' + escapeHtml(zh) + ' <span class="zh-auto">自动</span>';
+    }
+  });
+}
+
 function buildPreviewList() {
   var type = document.getElementById('preview-type') ? document.getElementById('preview-type').value : 'all';
   var list = words.filter(function (w) {
@@ -1207,8 +1287,12 @@ function buildPreviewList() {
       textHtml = '<div class="preview-text">' + escapeHtml(w.word) + '</div>';
     }
     var meaningHtml = '';
-    if ((w.type === 'en' || w.type === 'en-sentence') && w.meaning && w.meaning.trim()) {
-      meaningHtml = '<div class="preview-meaning"><span class="zh-label">中文</span>' + escapeHtml(w.meaning.trim()) + '</div>';
+    if (w.type === 'en' || w.type === 'en-sentence') {
+      if (w.meaning && w.meaning.trim()) {
+        meaningHtml = '<div class="preview-meaning"><span class="zh-label">中文</span>' + escapeHtml(w.meaning.trim()) + '</div>';
+      } else {
+        meaningHtml = '<div class="preview-meaning empty" id="pvmean-' + i + '"><span class="zh-label">中文</span><span class="zh-auto-status">自动翻译中…</span></div>';
+      }
     }
     return '<div class="preview-item" id="pv-' + i + '" onclick="previewReadItem(' + i + ')">' +
       textHtml +
@@ -1219,6 +1303,13 @@ function buildPreviewList() {
         '<button class="icon-btn" title="朗读" onclick="event.stopPropagation();previewReadItem(' + i + ')">🔊</button>' +
       '</div></div>';
   }).join('');
+
+  // 自动翻译兜底：未填 meaning 的英文条目，桌面 Chrome/Edge 用浏览器内置 Translator 自动翻译；不支持则隐藏
+  list.forEach(function (w, i) {
+    if ((w.type === 'en' || w.type === 'en-sentence') && !(w.meaning && w.meaning.trim())) {
+      autoTranslateFill(document.getElementById('pvmean-' + i), w.word, 'preview');
+    }
+  });
 }
 
 function previewReadItem(idx) {
@@ -1724,6 +1815,12 @@ function renderWordList() {
     '</div>';
   list.innerHTML = selectAllBar + html;
   updateCollectionList(wordFilter);
+  // 自动翻译兜底：未填 meaning 的英文条目，桌面浏览器自动翻译；不支持则隐藏
+  words.forEach(function (w, idx) {
+    if ((w.type === 'en' || w.type === 'en-sentence') && !(w.meaning && w.meaning.trim())) {
+      autoTranslateFill(document.getElementById('wimean-' + idx), w.word, 'list');
+    }
+  });
 }
 
 var collapsedCollections = new Set();
@@ -1805,7 +1902,9 @@ function renderWordItem(w, depth) {
   var wordTextHtml;
   if (w.type === 'en' || w.type === 'en-sentence') {
     wordTextHtml = enWordsClickableHtml(w.word, realIdx, 'readWordFromList') +
-      (w.meaning && w.meaning.trim() ? '<span class="word-meaning">中文：' + escapeHtml(w.meaning.trim()) + '</span>' : '');
+      (w.meaning && w.meaning.trim()
+        ? '<span class="word-meaning">中文：' + escapeHtml(w.meaning.trim()) + '</span>'
+        : '<span class="word-meaning" id="wimean-' + realIdx + '">中文：自动翻译中…</span>');
   } else {
     wordTextHtml = escapeHtml(w.type === 'textbook' ? (w.title || w.word) : w.word);
   }

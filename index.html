@@ -1176,13 +1176,30 @@ function previewClearAll() { _previewAll = false; _previewSelected.clear(); rend
 // ===== 浏览器内置翻译（en->zh）渐进增强 =====
 // 手动录入的 meaning 优先；未填时，桌面 Chrome/Edge 138+ 用浏览器内置 Translator 在设备内自动翻译（免费、离线、不联网、不发外部）。
 // 不支持的浏览器（手机/WebView/旧版）优雅降级：隐藏中文，不报错。
+// ===== 英文释义自动翻译（两级兜底，渐进增强） =====
+// 第一级：浏览器内置 Translator API（Chrome/Edge 138+ 桌面，免费/离线/隐私），不支持则降级。
+// 第二级：本地 transformers.js + opus-mt-en-zh INT8 模型（覆盖手机 / WebView / 旧浏览器），运行时从 NAS 懒加载，绝不进 APK。
+// 两级都不可用（或未部署模型）→ 隐藏中文，不报错。
+//
+// 部署第二级所需（详见 README「本地翻译模型」一节，或用 tools/fetch_translate_model.sh 一键拉取）：
+//   1) 把 transformers.js v3 的 ESM 构建放到 TRANSLATE_LIB_URL（默认 vendor/translate/transformers.min.js）
+//   2) 把 Xenova/opus-mt-en-zh 的 ONNX 模型目录放到 TRANSLATE_MODEL_URL（默认 vendor/translate/opus-mt-en-zh/）
+var TRANSLATE_LIB_URL = 'vendor/translate/transformers.min.js'; // transformers.js v3 (ESM)，需自行下载托管到 NAS
+var TRANSLATE_MODEL_URL = 'vendor/translate/opus-mt-en-zh/';     // 本地 opus-mt-en-zh 模型目录
+var TRANSLATE_DTYPE = 'q8';                                      // 与模型文件匹配：量化版 'q8'，fp32 版 'fp32'
+var TRANSLATE_USE_WEBGPU = false;                                // WebView/手机用 wasm 更稳；桌面可试 true 走 webgpu
+
 var _translatorReady = null;
 var _translatorUnsupported = false;
+var _localLib = null;
+var _localTranslator = null;
+var _localUnsupported = false;
 var _translateCache = {};
 var _trPendings = [];
 var _trRunning = 0;
 var _trMax = 3;
 
+// ---- 第一级：浏览器内置 Translator ----
 function _getTranslator() {
   if (_translatorUnsupported) return Promise.reject(new Error('unsupported'));
   if (_translatorReady) return _translatorReady;
@@ -1204,15 +1221,69 @@ function _getTranslator() {
   return _translatorReady;
 }
 
-function browserTranslate(text) {
+// ---- 第二级：本地 transformers.js + opus-mt-en-zh ----
+function _loadTransformersLib() {
+  if (_localUnsupported) return Promise.reject(new Error('lib unsupported'));
+  if (_localLib) return Promise.resolve(_localLib);
+  // 动态加载本地托管的 transformers.js（ESM）。file:// 或不支持动态 import 时抛错 → 自动降级
+  return import(TRANSLATE_LIB_URL).then(function (mod) {
+    _localLib = mod;
+    return mod;
+  }).catch(function (e) {
+    _localUnsupported = true;
+    throw e;
+  });
+}
+
+function _getLocalTranslator() {
+  if (_localUnsupported) return Promise.reject(new Error('local unsupported'));
+  if (_localTranslator) return _localTranslator;
+  _localTranslator = _loadTransformersLib().then(function (mod) {
+    try {
+      if (mod.env && mod.env.wasm && typeof mod.env.wasm.wasmPaths === 'string') {
+        mod.env.wasm.wasmPaths = TRANSLATE_LIB_URL.replace(/[^/]*$/, ''); // onnxruntime-web 同目录取 .wasm
+      }
+    } catch (e) {}
+    return mod.pipeline('translation', TRANSLATE_MODEL_URL, {
+      device: TRANSLATE_USE_WEBGPU ? 'webgpu' : 'wasm',
+      dtype: TRANSLATE_DTYPE
+    });
+  }).catch(function (e) {
+    _localUnsupported = true;
+    _localTranslator = null;
+    throw e;
+  });
+  return _localTranslator;
+}
+
+function _translateViaBrowser(text) {
+  return _getTranslator().then(function (t) { return t.translate(text); }).then(function (r) {
+    return (r || '').trim();
+  });
+}
+
+function _translateViaLocal(text) {
+  return _getLocalTranslator().then(function (lt) {
+    return lt(text).then(function (r) {
+      var arr = Array.isArray(r) ? r : [r];
+      var s = arr[0] && (arr[0].translation_text || arr[0].translation || arr[0].text);
+      return (s || '').toString().trim();
+    });
+  });
+}
+
+// 两级兜底入口：先浏览器内置，失败再本地模型，再失败由调用方隐藏
+function translateText(text) {
   text = (text || '').trim();
   if (!text) return Promise.reject(new Error('empty'));
   if (Object.prototype.hasOwnProperty.call(_translateCache, text)) return Promise.resolve(_translateCache[text]);
-  return _getTranslator().then(function (t) { return t.translate(text); }).then(function (res) {
-    var out = (res || '').trim();
-    _translateCache[text] = out;
-    return out;
-  });
+  return _translateViaBrowser(text)
+    .catch(function () { return _translateViaLocal(text); })
+    .then(function (out) {
+      out = (out || '').trim();
+      _translateCache[text] = out;
+      return out;
+    });
 }
 
 function _pumpTranslate() {
@@ -1220,7 +1291,7 @@ function _pumpTranslate() {
     var job = _trPendings.shift();
     _trRunning++;
     (function (j) {
-      browserTranslate(j.text).then(function (zh) {
+      translateText(j.text).then(function (zh) {
         try { j.onDone(zh || null, null); } catch (e) {}
       }).catch(function () {
         try { j.onDone(null, 'err'); } catch (e) {}

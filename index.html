@@ -247,6 +247,11 @@ textarea{resize:vertical;min-height:80px}
     <button class="btn btn-outline btn-sm" style="flex:1" onclick="document.getElementById('import-file-input').click()" >📥 导入数据</button>
     <input type="file" id="import-file-input" accept=".json" style="display:none" onchange="importWords(event)" >
   </div>
+  <div style="display:flex;gap:8px;margin-bottom:8px" >
+    <button class="btn btn-outline btn-sm" style="flex:2" onclick="batchTranslateMeanings()" >🌐 批量补中文（历史英文）</button>
+    <button class="btn btn-outline btn-sm" style="flex:1" onclick="clearAutoMeanings()" >↩️ 清除自动翻译</button>
+  </div>
+  <div id="batch-translate-status" style="font-size:12px;color:var(--text2);margin-bottom:12px;line-height:1.6" >已添加的英语单词 / 句子，中文会自动补上并保存；也可点上方按钮一次性批量补全。</div>
   <div id="word-list" style="padding-bottom:70px" ></div>
 </div>
 
@@ -1254,6 +1259,7 @@ function saveTranslateSettings() {
   translateSettings.dtype = TRANSLATE_DTYPE = (translateSettings.dtype || 'q8');
   translateSettings.useWebgpu = TRANSLATE_USE_WEBGPU = !!translateSettings.useWebgpu;
   _localLib = null; _localTranslator = null; _localUnsupported = false; // 重置缓存，下次用新路径重新加载
+  _translatorUnsupported = false; _translatorReady = null; _translateNoCapability = false; // 允许按新设置重新探测
   try { localStorage.setItem('dictation_translate_settings', JSON.stringify(translateSettings)); } catch (e) {}
 }
 // 进入语音页时回填 UI
@@ -1365,17 +1371,25 @@ function _translateViaLocal(text) {
   });
 }
 
+var _translateNoCapability = false; // 本设备确无翻译能力时短路，避免反复排队
+var _saveDataTimer = null;          // 合并多次写盘
+
 // 两级兜底入口：先浏览器内置，失败再本地模型，再失败由调用方隐藏
 function translateText(text) {
   text = (text || '').trim();
   if (!text) return Promise.reject(new Error('empty'));
   if (Object.prototype.hasOwnProperty.call(_translateCache, text)) return Promise.resolve(_translateCache[text]);
+  if (_translateNoCapability) return Promise.reject(new Error('no capability'));
   return _translateViaBrowser(text)
     .catch(function () { return _translateViaLocal(text); })
     .then(function (out) {
       out = (out || '').trim();
       _translateCache[text] = out;
       return out;
+    })
+    .catch(function (e) {
+      if (_translatorUnsupported && (!translateSettings.enabled || _localUnsupported)) _translateNoCapability = true;
+      throw e;
     });
 }
 
@@ -1397,13 +1411,20 @@ function _pumpTranslate() {
 }
 
 function enqueueTranslate(text, onDone) {
+  if (_translateNoCapability) { try { onDone(null, 'err'); } catch (e) {} return; }
   _trPendings.push({ text: text, onDone: onDone });
   _pumpTranslate();
 }
 
-function autoTranslateFill(el, enText, kind) {
-  if (!el) return;
+function autoTranslateFill(el, enText, kind, w) {
+  // 即使占位元素不在当前视图（被筛选/折叠）也照常翻译，结果直接落库
   enqueueTranslate(enText, function (zh) {
+    if (zh && w) {
+      w.meaning = zh;
+      w.meaningAuto = true;      // 标记来源，便于区分人工释义、也便于一键撤销
+      saveDataDebounced();
+    }
+    if (!el) return;
     if (!zh) { el.style.display = 'none'; return; }
     if (kind === 'preview') {
       el.className = 'preview-meaning';
@@ -1413,6 +1434,55 @@ function autoTranslateFill(el, enText, kind) {
       el.innerHTML = '中文：' + escapeHtml(zh) + ' <span class="zh-auto">自动</span>';
     }
   });
+}
+
+// 合并多次写盘，后台批量翻译时避免逐条写 localStorage
+function saveDataDebounced() {
+  if (_saveDataTimer) clearTimeout(_saveDataTimer);
+  _saveDataTimer = setTimeout(function () { _saveDataTimer = null; saveData(); }, 250);
+}
+
+// 一键为「已经添加」但还没中文的英语单词 / 句子批量补中文，结果写入数据永久保存
+function batchTranslateMeanings() {
+  var st = document.getElementById('batch-translate-status');
+  var targets = words.filter(function (w) {
+    return (w.type === 'en' || w.type === 'en-sentence') && !(w.meaning && w.meaning.trim());
+  });
+  if (!targets.length) { if (st) st.textContent = '✅ 所有英语条目都已有中文释义，无需翻译。'; return; }
+  if (st) st.textContent = '正在检测翻译能力…';
+  _translateNoCapability = false; // 用户刚改过设置时允许重试
+  translateText(targets[0].word).then(function (probe) {
+    if (!probe || !probe.trim()) throw new Error('no capability');
+    var done = 0, ok = 0, failed = 0;
+    if (st) st.textContent = '正在翻译 0/' + targets.length + '…';
+    targets.forEach(function (w) {
+      enqueueTranslate(w.word, function (zh) {
+        done++;
+        if (zh) { w.meaning = zh; w.meaningAuto = true; ok++; } else failed++;
+        if (st) st.textContent = '正在翻译 ' + done + '/' + targets.length + '…';
+        if (done === targets.length) {
+          if (_saveDataTimer) { clearTimeout(_saveDataTimer); _saveDataTimer = null; }
+          saveData();
+          renderWordList();
+          if (st) st.textContent = '✅ 完成：成功 ' + ok + ' 条' + (failed ? '，失败 ' + failed + ' 条' : '') + '。已保存，可点「导出数据」同步到手机 / 平板。';
+        }
+      });
+    });
+  }).catch(function () {
+    _translateNoCapability = true;
+    if (st) st.textContent = '⚠️ 当前设备无法自动翻译：请用桌面 Chrome / Edge 138+，或在「语音」页启用并部署本地翻译模型。也可手动填写中文释义，或导入已翻译好的数据。';
+  });
+}
+
+// 撤销：只清除机器自动翻译写入的释义，人工填写的不受影响
+function clearAutoMeanings() {
+  var n = 0;
+  words.forEach(function (w) { if (w.meaningAuto) { delete w.meaning; delete w.meaningAuto; n++; } });
+  if (_saveDataTimer) { clearTimeout(_saveDataTimer); _saveDataTimer = null; }
+  saveData();
+  renderWordList();
+  var st = document.getElementById('batch-translate-status');
+  if (st) st.textContent = n ? ('已清除 ' + n + ' 条自动翻译释义（人工填写的未受影响）') : '没有自动翻译的释义可清除。';
 }
 
 function buildPreviewList() {
@@ -1453,7 +1523,8 @@ function buildPreviewList() {
     var meaningHtml = '';
     if (w.type === 'en' || w.type === 'en-sentence') {
       if (w.meaning && w.meaning.trim()) {
-        meaningHtml = '<div class="preview-meaning"><span class="zh-label">中文</span>' + escapeHtml(w.meaning.trim()) + '</div>';
+        meaningHtml = '<div class="preview-meaning"><span class="zh-label">中文</span>' + escapeHtml(w.meaning.trim()) +
+          (w.meaningAuto ? ' <span class="zh-auto">自动</span>' : '') + '</div>';
       } else {
         meaningHtml = '<div class="preview-meaning empty" id="pvmean-' + i + '"><span class="zh-label">中文</span><span class="zh-auto-status">自动翻译中…</span></div>';
       }
@@ -1471,7 +1542,7 @@ function buildPreviewList() {
   // 自动翻译兜底：未填 meaning 的英文条目，桌面 Chrome/Edge 用浏览器内置 Translator 自动翻译；不支持则隐藏
   list.forEach(function (w, i) {
     if ((w.type === 'en' || w.type === 'en-sentence') && !(w.meaning && w.meaning.trim())) {
-      autoTranslateFill(document.getElementById('pvmean-' + i), w.word, 'preview');
+      autoTranslateFill(document.getElementById('pvmean-' + i), w.word, 'preview', w);
     }
   });
 }
@@ -1982,7 +2053,7 @@ function renderWordList() {
   // 自动翻译兜底：未填 meaning 的英文条目，桌面浏览器自动翻译；不支持则隐藏
   words.forEach(function (w, idx) {
     if ((w.type === 'en' || w.type === 'en-sentence') && !(w.meaning && w.meaning.trim())) {
-      autoTranslateFill(document.getElementById('wimean-' + idx), w.word, 'list');
+      autoTranslateFill(document.getElementById('wimean-' + idx), w.word, 'list', w);
     }
   });
 }
@@ -2067,7 +2138,7 @@ function renderWordItem(w, depth) {
   if (w.type === 'en' || w.type === 'en-sentence') {
     wordTextHtml = enWordsClickableHtml(w.word, realIdx, 'readWordFromList') +
       (w.meaning && w.meaning.trim()
-        ? '<span class="word-meaning">中文：' + escapeHtml(w.meaning.trim()) + '</span>'
+        ? '<span class="word-meaning">中文：' + escapeHtml(w.meaning.trim()) + (w.meaningAuto ? ' <span class="zh-auto">自动</span>' : '') + '</span>'
         : '<span class="word-meaning" id="wimean-' + realIdx + '">中文：自动翻译中…</span>');
   } else {
     wordTextHtml = escapeHtml(w.type === 'textbook' ? (w.title || w.word) : w.word);

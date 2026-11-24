@@ -295,10 +295,12 @@ textarea{resize:vertical;min-height:80px}
       <div style="font-size:13px;color:var(--text2)" id="dict-counter" >1/10</div>
       <div class="prompt" id="dict-prompt" >--</div>
       <div class="hint" id="dict-hint" ></div>
+      <div id="speech-reset-status" style="display:none;font-size:12px;color:var(--primary);margin:4px 0 0" ></div>
       <textarea id="dict-input" placeholder="输入你的答案..." autocomplete="off" rows="1" oninput="autoGrowInput()"></textarea>
       <div style="margin-top:16px;display:flex;gap:8px;justify-content:center;flex-wrap:wrap" >
         <button class="btn btn-outline btn-sm" id="dict-prev-btn" onclick="prevDictItem()" style="display:none" >← 上一题</button>
         <button class="btn btn-outline btn-sm" onclick="playCurrentAudio()" >朗读</button>
+        <button class="btn btn-outline btn-sm" onclick="resetSpeech()" title="朗读卡住/不读了？点此重置语音" >🔄 重置语音</button>
         <button class="btn btn-primary" onclick="submitAnswer()" >确定</button>
         <button class="btn btn-outline btn-sm" onclick="skipWord()" >跳过</button>
         <button class="btn btn-outline btn-sm" onclick="reviewAllDictation()" style="border-color:var(--primary);color:var(--primary)">检查</button>
@@ -2714,12 +2716,16 @@ function _speakWeb(text, lang, rate, done, token) {
   var v = _pickVoice(lang);
   if (v) utter.voice = v;
   var fired = false;
-  function finish() { if (fired) return; fired = true; done(); }
+  var watchdog = null;
+  function finish() { if (fired) return; fired = true; if (watchdog) clearTimeout(watchdog); done(); }
   utter.onend = finish; utter.onerror = finish;
   var delay = _speechFirstPending ? 60 : 0; // 首句延迟，规避 cancel 后立 speak 被吞
   _speechFirstPending = false;
   setTimeout(function () {
     if (token !== undefined && token !== _speakToken) { done(); return; }  // 已被新的朗读作废，不再发声
+    // 看门狗：Chrome/Safari 长时间运行后 onend 偶发不触发，会让 _speechBusy 永久卡死、之后全部不读。
+    // 超时强制推进队列，让朗读自动脱困（时长按文本长度估算，留足正常播放时间）。
+    watchdog = setTimeout(finish, Math.max(12000, text.length * 450));
     try { window.speechSynthesis.speak(utter); } catch (e) { finish(); }
   }, delay);
 }
@@ -2836,6 +2842,39 @@ function speak(text) {
     if (voiceSettings.engineEn === 'piper') { _enqueueSpeech(function (done) { _speakOpen(run.text, rate, done, myToken); }); return; }
     _enqueueSpeech(function (done) { _speakWeb(run.text, 'en-US', rate, done, myToken); });
   });
+}
+
+// ===== 语音一键重置：清除所有可能卡死的朗读状态，恢复朗读能力 =====
+// 触发场景：浏览器 onend 未触发导致 _speechBusy/_seqBusy 卡住、isSpeaking 卡在 true 使按钮变灰、
+// AudioContext 被系统挂起、Android TTS 结束回调丢失等。重置后不自动朗读，由用户再点「朗读」。
+function resetSpeech() {
+  _speakToken++;                 // 作废所有进行中的朗读任务
+  _seqActiveToken = -1;          // 作废顺序朗读序列
+  if (typeof window.speechSynthesis !== 'undefined') {
+    try { window.speechSynthesis.cancel(); } catch (e) {}
+    try { window.speechSynthesis.resume(); } catch (e) {}   // Chrome 会在长时间后台后自行 paused
+  }
+  _stopCloudAudio();
+  if (_stopLocalAudio) _stopLocalAudio();
+  if (window.AndroidTTS && window.AndroidTTS.stop) { try { window.AndroidTTS.stop(); } catch (e) {} }
+  _androidTtsEnd = null; _androidTtsToken = 0;
+  _seqList = []; _seqBusy = false; _seqCb = null;
+  _openBusy = false; _openLatest = null;
+  _speechQueue = []; _speechBusy = false; _speechFirstPending = true;
+  isSpeaking = false;
+  // 恢复 AudioContext（iOS 被系统挂起后不 resume 会静音）
+  try { if (_audioCtx && _audioCtx.state === 'suspended') _audioCtx.resume(); } catch (e) {}
+  // 恢复所有被 isSpeaking 禁用的朗读按钮
+  document.querySelectorAll('.btn-speak, [onclick*="speak("]').forEach(function (btn) {
+    btn.style.opacity = '1'; btn.style.pointerEvents = 'auto';
+  });
+  var st = document.getElementById('speech-reset-status');
+  if (st) {
+    st.textContent = '✅ 语音已重置，请重新点「朗读」';
+    st.style.display = 'block';
+    clearTimeout(st._hideTimer);
+    st._hideTimer = setTimeout(function () { st.style.display = 'none'; }, 3000);
+  }
 }
 
 // ===== 开源本地语音引擎（Sherpa / Piper）：纯前端、免费、自动降级 =====
